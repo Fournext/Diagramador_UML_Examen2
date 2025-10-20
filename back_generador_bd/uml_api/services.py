@@ -10,10 +10,11 @@ def call_gemini(prompt: str):
     params = {"key": GEMINI_API_KEY}
 
     # Detectar si es una solicitud de edición
-    edit_keywords = ["cambies","cambiar", "cambia"
+    edit_keywords = ["cambies","cambiar", "cambia",
                      "edites","edita","editar", 
                      "modifiques", "modifica","modificar", 
-                     "actualices", "actualizar","actualiza"
+                     "actualices", "actualizar","actualiza",
+                     "agregar", "agrega","añadir","añade"
                     ]
     is_edit_request = any(keyword in prompt.lower() for keyword in edit_keywords)
 

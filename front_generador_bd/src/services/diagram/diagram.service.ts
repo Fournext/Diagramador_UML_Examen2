@@ -856,6 +856,12 @@ export class DiagramService {
 	loadFromJson(json: any, isStorageLoad: boolean = false) {
 		if (!this.graph) return;
 
+		// DETECTAR SI ES UNA EDICIÓN (tiene estructura original/editado)
+		if (json.original && json.editado) {
+			this.handleEditOperation(json);
+			return;
+		}
+
 		const idMap: Record<string, string> = {}; 
 		// mapea el id original del JSON -> id real en el canvas
 
@@ -920,6 +926,328 @@ export class DiagramService {
 
 			this.graph.addCell(link);
 		});
+	}
+
+	/**
+	 * Maneja operaciones de edición cuando llegan dos JSONs (original y editado)
+	 */
+	private handleEditOperation(editData: { original: any; editado: any }) {
+		//console.log('🔄 Procesando edición de clase UML', editData);
+
+		// 1. Buscar la clase a editar usando el JSON original
+		const originalClass = editData.original.classes?.[0];
+		if (!originalClass) {
+			//console.error('❌ No se encontró clase en JSON original');
+			return;
+		}
+
+		// 2. Buscar la clase en el canvas por nombre o ID
+		const existingElement = this.graph.getCells().find((cell: any) => {
+			if (!cell.isElement?.()) return false;
+			
+			// Buscar por ID si coincide
+			if (cell.id === originalClass.id) return true;
+			
+			// Buscar por nombre si no hay ID match
+			return cell.get('name') === originalClass.name;
+		});
+
+		if (!existingElement) {
+			console.warn('⚠️ No se encontró la clase en el canvas, creando nueva...');
+			// Si no existe, crear la clase original primero
+			this.createUmlClass({
+				id: originalClass.id,
+				name: originalClass.name,
+				position: originalClass.position || { x: 100, y: 100 },
+				size: originalClass.size || { width: 180, height: 110 },
+				attributes: originalClass.attributes,
+				methods: originalClass.methods
+			});
+			return;
+		}
+
+		// 3. Aplicar las modificaciones del JSON editado
+		const editedClass = editData.editado.classes?.[0];
+		if (!editedClass) {
+			console.error('❌ No se encontró clase en JSON editado');
+			return;
+		}
+
+		//console.log('🎯 Aplicando ediciones a:', existingElement.get('name'));
+
+		// 4. Actualizar propiedades modificadas (nombre)
+		if (editedClass.name) {
+			const currentCanvasName = existingElement.get('name');
+			
+			// Si el JSON original tiene el nombre de la clase, significa que se debe editar
+			if (originalClass.name === currentCanvasName) {
+				// Aplicar el nombre editado desde el JSON editado
+				existingElement.set('name', editedClass.name);
+				console.log(`✏️ Nombre actualizado: "${currentCanvasName}" -> "${editedClass.name}"`);
+			} else {
+				console.log(`✅ Manteniendo nombre actual del canvas: "${currentCanvasName}"`);
+			}
+		}
+
+		// 5. Actualizar atributos
+		if (editedClass.attributes) {
+			// Obtener atributos ACTUALES del canvas (no del JSON original)
+			const currentCanvasAttributes = existingElement.get('attributes') || '';
+			
+			// Convertir atributos editados a formato texto
+			const newAttributesText = Array.isArray(editedClass.attributes)
+				? editedClass.attributes
+					.map((attr: any) => `${attr.name}: ${attr.type}`)
+					.join('\n')
+				: editedClass.attributes;
+
+			// Mezclar atributos comparando original vs canvas, reemplazando con editado
+			const finalAttributes = this.mergeAttributes(
+				currentCanvasAttributes, 
+				newAttributesText, 
+				editedClass.attributes,
+				originalClass.attributes || []
+			);
+			
+			existingElement.set('attributes', finalAttributes);
+			//console.log('📝 Atributos actualizados usando comparación original vs canvas:', finalAttributes);
+		}
+
+		// 6. Actualizar métodos
+		if (editedClass.methods) {
+			// Obtener métodos ACTUALES del canvas (no del JSON original)
+			const currentCanvasMethods = existingElement.get('methods') || '';
+			
+			// Convertir métodos editados a formato texto
+			const newMethodsText = Array.isArray(editedClass.methods)
+				? editedClass.methods
+					.map((m: any) => {
+						const params = m.parameters ? `(${m.parameters})` : '()';
+						const ret = m.returnType ? `: ${m.returnType}` : '';
+						return `${m.name}${params}${ret};`;
+					})
+					.join('\n')
+				: editedClass.methods;
+
+			// Mezclar métodos comparando original vs canvas, reemplazando con editado
+			const finalMethods = this.mergeMethods(
+				currentCanvasMethods, 
+				newMethodsText, 
+				editedClass.methods,
+				originalClass.methods || []
+			);
+			
+			existingElement.set('methods', finalMethods);
+			//console.log('🔧 Métodos actualizados usando comparación original vs canvas:', finalMethods);
+		}
+
+		// 7. Redimensionar automáticamente
+		this.edition.scheduleAutoResize(this.paper, existingElement);
+
+		// 8. Broadcast de la edición para colaboración (enviar múltiples broadcasts)
+		if (editedClass.name && originalClass.name) {
+			// Solo hacer broadcast si se detectó que el nombre debía cambiar
+			const currentCanvasName = existingElement.get('name');
+			if (currentCanvasName === editedClass.name && editedClass.name !== originalClass.name) {
+				this.collab.broadcast({
+					t: 'edit_text',
+					id: existingElement.id,
+					field: 'name',
+					value: existingElement.get('name')
+				});
+			}
+		}
+
+		if (editedClass.attributes) {
+			this.collab.broadcast({
+				t: 'edit_text',
+				id: existingElement.id,
+				field: 'attributes',
+				value: existingElement.get('attributes')
+			});
+		}
+
+		if (editedClass.methods) {
+			this.collab.broadcast({
+				t: 'edit_text',
+				id: existingElement.id,
+				field: 'methods',
+				value: existingElement.get('methods')
+			});
+		}
+
+		//console.log('✅ Edición completada exitosamente');
+	}
+
+
+
+	/**
+	 * Mezcla atributos comparando JSON original vs canvas actual, reemplazando con JSON editado
+	 * 1. Compara JSON original con canvas para ver qué se debe editar
+	 * 2. Reemplaza esos elementos con los valores del JSON editado
+	 * 3. Añade elementos que están en original pero no en canvas
+	 */
+	private mergeAttributes(canvasAttributesText: string, editedText: string, editedArray: any[], originalArray: any[] = []): string {
+		if (!Array.isArray(editedArray)) return editedText;
+
+		// Parsear atributos actuales del canvas (formato: "nombre: tipo")
+		const canvasLines = canvasAttributesText.split('\n').filter(line => line.trim());
+		const canvasAttributes = new Map<string, { fullLine: string, type: string }>();
+		
+		canvasLines.forEach(line => {
+			const colonIndex = line.indexOf(': ');
+			if (colonIndex > 0) {
+				const name = line.substring(0, colonIndex).trim();
+				const type = line.substring(colonIndex + 1).trim();
+				canvasAttributes.set(name, { fullLine: line, type });
+			}
+		});
+
+		// Mapear atributos originales y editados por nombre
+		const originalAttributeNames = new Set<string>();
+		
+		// Procesar array original (puede ser objetos o strings)
+		originalArray.forEach(attr => {
+			if (typeof attr === 'object' && attr.name) {
+				originalAttributeNames.add(attr.name);
+			} else if (typeof attr === 'string') {
+				const colonIndex = attr.indexOf(':');
+				if (colonIndex > 0) {
+					const name = attr.substring(0, colonIndex).trim();
+					originalAttributeNames.add(name);
+				}
+			}
+		});
+		
+		// Procesar array editado
+		// editedArray.forEach(attr => {
+		// 	if (typeof attr === 'object' && attr.name) {
+		// 		editedAttributes.set(attr.name, attr);
+		// 	}
+		// });
+		// console.log('----------------------------------------');
+		// console.log('🔍 Canvas actual:', Array.from(canvasAttributes.keys()));
+		// console.log('🔍 JSON original:', Array.from(originalAttributeNames));
+		// console.log('🔍 JSON editado:', Array.from(editedArray));
+
+		const finalLines: string[] = [];
+
+		// 1. Procesar atributos que están en el canvas
+		canvasAttributes.forEach((canvasData, canvasName) => {
+			// Verificar si este atributo del canvas debe ser editado
+			if (originalAttributeNames.has(canvasName)) {
+				// Este atributo existe en original y editado, reemplazar con editado;
+				const editedAttr = editedArray.shift();
+				const newLine = `${editedAttr.name}: ${editedAttr.type}`;
+				finalLines.push(newLine);
+				//console.log(`✏️ Editando "${canvasName}" del canvas: "${canvasData.fullLine}" -> "${newLine}"`);
+			} else {
+				// Mantener el atributo del canvas sin cambios
+				finalLines.push(canvasData.fullLine);
+				//console.log(`✅ Manteniendo "${canvasName}" del canvas: "${canvasData.fullLine}"`);
+			}
+		});
+
+		// 2. Añadir atributos que están en editado pero NO en canvas
+		editedArray.forEach(editedName => {
+			if (!canvasAttributes.has(editedName)) {
+				// Este atributo no existe en canvas pero sí en original y editado
+				const editedAttr = editedArray.shift();
+				const newLine = `${editedAttr.name}: ${editedAttr.type}`;
+				finalLines.push(newLine);
+				//console.log(`🆕 Añadiendo "${editedName}" que no estaba en canvas: "${newLine}"`);
+			}
+		});
+
+		const result = finalLines.join('\n');
+		//console.log('📝 Resultado final de atributos:', result);
+		return result;
+	}
+
+	/**
+	 * Mezcla métodos comparando JSON original vs canvas actual, reemplazando con JSON editado
+	 * 1. Compara JSON original con canvas para ver qué se debe editar
+	 * 2. Reemplaza esos elementos con los valores del JSON editado
+	 * 3. Añade elementos que están en original pero no en canvas
+	 */
+	private mergeMethods(canvasMethodsText: string, editedText: string, editedArray: any[], originalArray: any[] = []): string {
+		if (!Array.isArray(editedArray)) return editedText;
+
+		// Parsear métodos actuales del canvas (formato: "nombre(params): tipo;")
+		const canvasLines = canvasMethodsText.split('\n').filter(line => line.trim());
+		const canvasMethods = new Map<string, string>();
+		
+		canvasLines.forEach(line => {
+			const parenIndex = line.indexOf('(');
+			if (parenIndex > 0) {
+				const methodName = line.substring(0, parenIndex).trim();
+				canvasMethods.set(methodName, line);
+			}
+		});
+
+		// Mapear métodos originales y editados por nombre
+		const originalMethodNames = new Set<string>();
+		
+		// Procesar array original (puede ser objetos o strings)
+		originalArray.forEach(method => {
+			if (typeof method === 'object' && method.name) {
+				originalMethodNames.add(method.name);
+			} else if (typeof method === 'string') {
+				const parenIndex = method.indexOf('(');
+				if (parenIndex > 0) {
+					const name = method.substring(0, parenIndex).trim();
+					originalMethodNames.add(name);
+				}
+			}
+		});
+		
+		// Procesar array editado
+		// editedArray.forEach(method => {
+		// 	if (typeof method === 'object' && method.name) {
+		// 		editedMethods.set(method.name, method);
+		// 	}
+		// });
+
+		// console.log('🔍 Canvas actual:', Array.from(canvasMethods.keys()));
+		// console.log('🔍 JSON original:', Array.from(originalMethodNames));
+		// console.log('🔍 JSON editado:', Array.from(editedMethods.keys()));
+
+		const finalLines: string[] = [];
+
+		// 1. Procesar métodos que están en el canvas
+		canvasMethods.forEach((canvasLine, canvasName) => {
+			// Verificar si este método del canvas debe ser editado
+			if (originalMethodNames.has(canvasName)) {
+				// Este método existe en original y editado, reemplazar con editado
+				const editedMethod = editedArray.shift();
+				const params = editedMethod.parameters ? `(${editedMethod.parameters})` : '()';
+				const ret = editedMethod.returnType ? `: ${editedMethod.returnType}` : '';
+				const newLine = `${editedMethod.name}${params}${ret};`;
+				finalLines.push(newLine);
+				//console.log(`✏️ Editando "${canvasName}" del canvas: "${canvasLine}" -> "${newLine}"`);
+			} else {
+				// Mantener el método del canvas sin cambios
+				finalLines.push(canvasLine);
+				//console.log(`✅ Manteniendo "${canvasName}" del canvas: "${canvasLine}"`);
+			}
+		});
+
+		// 2. Añadir métodos que están en edited pero NO en canvas
+		editedArray.forEach(editedName => {
+			if (!canvasMethods.has(editedName)) {
+				// Este método no existe en canvas pero sí en original y editado
+				const editedMethod = editedArray.shift();
+				const params = editedMethod.parameters ? `(${editedMethod.parameters})` : '()';
+				const ret = editedMethod.returnType ? `: ${editedMethod.returnType}` : '';
+				const newLine = `${editedMethod.name}${params}${ret};`;
+				finalLines.push(newLine);
+				//console.log(`🆕 Añadiendo "${editedName}" que no estaba en canvas: "${newLine}"`);
+			}
+		});
+
+		const result = finalLines.join('\n');
+		//console.log('🔧 Resultado final de métodos:', result);
+		return result;
 	}
 
 	// Exporta el estado actual del diagrama a JSON
