@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
 import environ
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -47,9 +48,8 @@ INSTALLED_APPS = [
 ASGI_APPLICATION = "diagramador_uml.asgi.application"
 
 
-env = environ.Env(
-    DEBUG=(bool, False)
-)
+env = environ.Env()
+environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 
 GEMINI_API_KEY = env("GEMINI_API_KEY")
 
@@ -113,7 +113,7 @@ DATABASES = {
         'NAME': 'uml_bd',      # nombre de tu base de datos
         'USER': 'postgres',          # tu usuario de PostgreSQL
         'PASSWORD': '071104',   # la contraseña de ese usuario
-        'HOST': 'postgres',         # o la IP del servidor si es remoto
+        'HOST': 'localhost',         # o la IP del servidor si es remoto
         'PORT': '5432',              # puerto por defecto de PostgreSQL
     }
 }
