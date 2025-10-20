@@ -1,0 +1,46 @@
+package {{basePackage}}.controller;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+import java.util.*;
+import {{basePackage}}.model.{{EntityName}};
+import {{basePackage}}.service.{{EntityName}}Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+
+@RestController
+@RequestMapping("/api/{{plural}}")
+@RequiredArgsConstructor
+public class {{EntityName}}Controller {
+
+    private final {{EntityName}}Service service;
+
+    @GetMapping
+    public List<{{EntityName}}> all() {
+    return service.findAll();
+    }
+
+    @GetMapping("/{id}")
+    public {{EntityName}} one(@PathVariable("id") {{pkType}} id) {
+    return service.findById(id)
+    .orElseThrow(() -> new RuntimeException("{{EntityName}} not found with id " + id));
+    }
+
+    @PostMapping
+    public {{EntityName}} create(@RequestBody {{EntityName}} body) {
+    return service.save(body);
+    }
+
+    @PutMapping("/{id}")
+    public {{EntityName}} update(@PathVariable("id") {{pkType}} id, @RequestBody {{EntityName}} body) {
+    {{#hasPk}}
+        body.{{pkSetter}}(id);
+    {{/hasPk}}
+    return service.save(body);
+    }
+
+    @DeleteMapping("/{id}")
+    public void delete(@PathVariable("id") {{pkType}} id) {
+    service.delete(id);
+    }
+}

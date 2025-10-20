@@ -1,0 +1,77 @@
+package {{basePackage}}.model;
+
+import jakarta.persistence.*;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.experimental.SuperBuilder;
+import java.util.*;
+{{#needsOnDeleteImport}}
+    import org.hibernate.annotations.OnDelete;
+    import org.hibernate.annotations.OnDeleteAction;
+{{/needsOnDeleteImport}}
+import com.fasterxml.jackson.annotation.*;
+
+@Entity
+@Data
+@NoArgsConstructor
+@SuperBuilder
+{{#isParent}}
+    @Inheritance(strategy = InheritanceType.JOINED)
+{{/isParent}}
+public class {{EntityName}}{{#parentClass}} extends {{parentClass}}{{/parentClass}} {
+
+{{#attributes}}
+    {{#isId}}
+        @Id
+        {{#generated}}
+            @GeneratedValue(strategy = GenerationType.IDENTITY)
+        {{/generated}}
+        private {{type}} {{name}};
+    {{/isId}}
+    {{^isId}}
+        private {{type}} {{name}};
+    {{/isId}}
+{{/attributes}}
+
+{{#manyToOne}}
+    @ManyToOne
+    @JsonBackReference
+    @JoinColumn(name = "{{targetField}}_id")
+    private {{TargetEntity}} {{targetField}};
+{{/manyToOne}}
+
+{{#oneToMany}}
+    @OneToMany(mappedBy = "{{mappedBy}}", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonManagedReference
+    private List<{{TargetEntity}}> {{collectionField}} = new ArrayList<>();
+{{/oneToMany}}
+
+{{#oneToOne}}
+    @OneToOne{{#composition}}(cascade = CascadeType.ALL, orphanRemoval = true){{/composition}}
+    {{#composition}}
+        @OnDelete(action = OnDeleteAction.CASCADE)
+    {{/composition}}
+    @JoinColumn(name = "{{targetField}}_id")
+    @JsonManagedReference
+    private {{TargetEntity}} {{targetField}};
+{{/oneToOne}}
+
+{{#manyToMany}}
+    @ManyToMany
+    @JoinTable(
+    name = "{{joinTable}}",
+    joinColumns = @JoinColumn(name = "{{thisTable}}_id"),
+    inverseJoinColumns = @JoinColumn(name = "{{otherTable}}_id")
+    )
+    @JsonManagedReference
+    private Set<{{TargetEntity}}> {{collectionField}} = new HashSet<>();
+{{/manyToMany}}
+
+{{#methods}}
+    public {{returnType}} {{name}}({{parameters}}) {
+    // TODO: implementar
+    {{#defaultReturn}}return {{defaultReturn}};{{/defaultReturn}}
+    }
+{{/methods}}
+}
