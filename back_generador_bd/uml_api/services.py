@@ -23,10 +23,14 @@ def call_gemini(prompt: str):
         prompt_text = f"""
 Analiza el siguiente prompt de edición y devuelve DOS JSONs separados:
 
-IMPORTANTE: El usuario quiere editar/modificar una tabla existente. Debes devolver:
+IMPORTANTE: El usuario quiere editar/modificar una tabla o relación existente. Debes devolver:
 
 1. **JSON ORIGINAL**: El modelo UML completo como está actualmente (sin cambios)
-2. **JSON EDITADO**: Solo los elementos modificados con el atributo "editado": true
+2. **JSON EDITADO**: Solo los elementos modificados aplicando EXACTAMENTE los cambios solicitados
+
+Ejemplo de cambio de atributo:
+- Si el prompt dice "cambia fecha:Date a fecha_Hora:String"
+- En "editado" debe aparecer: {{"name": "fecha_Hora", "type": "String", "editado": true}}
 
 Formato de respuesta:
 ```json
@@ -37,10 +41,10 @@ Formato de respuesta:
         "id": "uuid",
         "name": "NombreClase",
         "attributes": [
-          {{"name": "atributo", "type": "tipo"}}
+          {{"name": "atributo_original", "type": "tipo_original"}}
         ],
         "methods": [
-          {{"name": "metodo", "parameters": "", "returnType": ""}}
+          {{"name": "metodo_original", "parameters": "", "returnType": ""}}
         ]
       }}
     ],
@@ -57,25 +61,38 @@ Formato de respuesta:
   "editado": {{
     "classes": [
       {{
-        "id": "mismo_uuid_del_original",
+        "id": "mismo_id_del_original",
         "name": "NombreClaseModificado",
         "attributes": [
-          {{"name": "atributo_modificado", "type": "tipo", "editado": true}}
+          {{"name": "nuevo_nombre_atributo", "type": "nuevo_tipo", "editado": true}}
         ],
         "methods": [
-          {{"name": "metodo_modificado", "parameters": "", "returnType": "", "editado": true}}
+          {{"name": "nuevo_nombre_metodo", "parameters": "nuevos_params", "returnType": "nuevo_tipo", "editado": true}}
         ],
         "editado": true
       }}
     ],
-    "relationships": []
+    "relationships": [
+      {{
+        "id": "mismo_id_del_original",
+        "type": "nuevo_tipo_relacion",
+        "sourceId": "uuid",
+        "targetId": "uuid",
+        "labels": ["nueva_etiqueta1", "nueva_etiqueta2"],
+        "editado": true
+      }}
+    ]
   }}
 }}
 ```
 
-Usa los mismos UUIDs en ambos JSONs para la misma entidad.
-Solo incluye en "editado" los elementos que realmente cambiaron.
-NO devuelvas nada más, solo el JSON.
+REGLAS CRÍTICAS:
+- Aplica EXACTAMENTE los cambios solicitados en el prompt
+- Si el prompt dice "cambia X a Y", en "editado" debe aparecer Y, NO X
+- En "editado" solo incluye los elementos que REALMENTE cambiaron con sus NUEVOS valores
+- Usa los mismos UUIDs en ambos JSONs para la misma entidad
+- Marca con "editado": true SOLO los elementos que sufrieron modificaciones
+- NO devuelvas nada más, solo el JSON
 
 Prompt del usuario:
 {prompt}
@@ -190,71 +207,3 @@ Prompt:
     except (KeyError, IndexError):
         return '{"error": "No se pudo parsear la respuesta de Gemini"}'
 
-def call_gemini_edit(original_model: str, edit_prompt: str):
-    """
-    Función específica para editar un modelo UML existente.
-    Recibe el modelo original y el prompt de edición.
-    """
-    GEMINI_API_KEY = getattr(settings, "GEMINI_API_KEY", None)
-
-    headers = {"Content-Type": "application/json"}
-    params = {"key": GEMINI_API_KEY}
-
-    data = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": f"""
-Tienes un modelo UML existente y una solicitud de edición. Devuelve DOS JSONs:
-
-MODELO ORIGINAL:
-{original_model}
-
-SOLICITUD DE EDICIÓN:
-{edit_prompt}
-
-Formato de respuesta exacto:
-{{
-  "original": {original_model},
-  "editado": {{
-    "classes": [
-      {{
-        "id": "mismo_uuid_del_original",
-        "name": "NombreModificado",
-        "attributes": [
-          {{"name": "nombre_modificado", "type": "tipo", "editado": true}}
-        ],
-        "methods": [
-          {{"name": "metodo_modificado", "parameters": "", "returnType": "", "editado": true}}
-        ],
-        "editado": true
-      }}
-    ],
-    "relationships": [
-      // Solo si se modifican relaciones
-    ]
-  }}
-}}
-
-REGLAS:
-1. Mantén los mismos UUIDs en ambos JSONs
-2. En "editado" solo incluye los elementos que cambiaron
-3. Marca con "editado": true los elementos modificados
-4. NO devuelvas nada más que el JSON
-"""
-                    }
-                ]
-            }
-        ]
-    }
-
-    response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data)
-    response.raise_for_status()
-    result = response.json()
-
-    try:
-        text_output = result["candidates"][0]["content"]["parts"][0]["text"]
-        return text_output
-    except (KeyError, IndexError):
-        return '{"error": "No se pudo parsear la respuesta de Gemini"}'

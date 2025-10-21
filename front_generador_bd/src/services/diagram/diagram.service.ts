@@ -969,7 +969,16 @@ export class DiagramService {
 		// 3. Aplicar las modificaciones del JSON editado
 		const editedClass = editData.editado.classes?.[0];
 		if (!editedClass) {
-			console.error('❌ No se encontró clase en JSON editado');
+			console.warn('❌ No se encontró clase en JSON editado');
+			if(!(editData.editado.relationships) || editData.editado.relationships.length === 0) return;
+			//Actualizar relaciones editadas
+			if (editData.editado.relationships && editData.editado.relationships.length > 0) {
+				editData.editado.relationships.forEach((editedRel: any) => {
+					if (editedRel.editado) {
+						this.updateRelationship(editedRel, editData.original.relationships, editData.original.classes);
+					}
+				});
+			}
 			return;
 		}
 
@@ -1073,6 +1082,15 @@ export class DiagramService {
 				id: existingElement.id,
 				field: 'methods',
 				value: existingElement.get('methods')
+			});
+		}
+
+		// 9. Actualizar relaciones editadas
+		if (editData.editado.relationships && editData.editado.relationships.length > 0) {
+			editData.editado.relationships.forEach((editedRel: any) => {
+				if (editedRel.editado) {
+					this.updateRelationship(editedRel, editData.original.relationships, editData.original.classes);
+				}
 			});
 		}
 
@@ -1250,6 +1268,275 @@ export class DiagramService {
 		return result;
 	}
 
+	/**
+	 * Actualiza una relación existente en el canvas con los datos editados
+	 * Busca las clases por nombre y luego la relación por tipo y conexiones
+	 */
+	private updateRelationship(editedRelation: any, originalRelationships: any[] = [], originalClasses: any[] = []) {
+		if (!editedRelation) return;
+
+		// 1. Buscar la relación original correspondiente por ID
+		const originalRelation = originalRelationships.find(rel => rel.id === editedRelation.id);
+		if (!originalRelation) {
+			console.warn(`⚠️ No se encontró relación original con ID: ${editedRelation.id}`);
+			return;
+		}
+
+		//console.log(`📋 Relación original encontrada:`, originalRelation);
+
+		// 2. Buscar las clases origen y destino por sus nombres en el JSON original
+		const sourceClass = originalClasses.find(cls => cls.id === originalRelation.sourceId);
+		const targetClass = originalClasses.find(cls => cls.id === originalRelation.targetId);
+
+		if (!sourceClass || !targetClass) {
+			console.warn(`⚠️ No se encontraron clases origen/destino en JSON original`);
+			return;
+		}
+
+		//console.log(`📝 Clases identificadas: "${sourceClass.name}" -> "${targetClass.name}"`);
+
+		// 3. Buscar estas clases en el canvas por nombre
+		const canvasSourceElement = this.graph.getCells().find((cell: any) => 
+			cell.isElement?.() && cell.get('name') === sourceClass.name
+		);
+		const canvasTargetElement = this.graph.getCells().find((cell: any) => 
+			cell.isElement?.() && cell.get('name') === targetClass.name
+		);
+
+		if (!canvasSourceElement || !canvasTargetElement) {
+			console.warn(`⚠️ No se encontraron las clases "${sourceClass.name}" o "${targetClass.name}" en el canvas`);
+			return;
+		}
+
+		//console.log(`🎯 Clases encontradas en canvas: "${canvasSourceElement.get('name')}" (${canvasSourceElement.id}) -> "${canvasTargetElement.get('name')}" (${canvasTargetElement.id})`);
+
+		// 4. Buscar la relación existente entre estas clases con el tipo original
+		const existingLink = this.graph.getLinks().find((link: any) => {
+			const linkSourceId = link.get('source')?.id;
+			const linkTargetId = link.get('target')?.id;
+			const linkType = link.get('relationType');
+			
+			return linkSourceId === canvasSourceElement.id && 
+				   linkTargetId === canvasTargetElement.id && 
+				   linkType === originalRelation.type;
+		});
+
+		if (!existingLink) {
+			console.warn(`⚠️ No se encontró relación ${originalRelation.type} entre "${sourceClass.name}" -> "${targetClass.name}" en el canvas`);
+			// Intentar buscar cualquier relación entre estas dos clases
+			const anyLink = this.graph.getLinks().find((link: any) => {
+				const linkSourceId = link.get('source')?.id;
+				const linkTargetId = link.get('target')?.id;
+				
+				return linkSourceId === canvasSourceElement.id && linkTargetId === canvasTargetElement.id;
+			});
+
+			if (anyLink) {
+				//console.log(`� Encontrada relación existente de tipo ${anyLink.get('relationType')}, actualizándola...`);
+				// Crear una versión segura del editedRelation que no cambie conexiones
+				const safeEditedRelation = {
+					...editedRelation,
+					sourceId: canvasSourceElement.id, // Usar IDs reales del canvas
+					targetId: canvasTargetElement.id  // Usar IDs reales del canvas
+				};
+				this.applyRelationshipChanges(anyLink, safeEditedRelation);
+				return;
+			}
+
+			// Si no existe ninguna relación, crear una nueva
+			//console.log(`� Creando nueva relación ${editedRelation.type} entre "${sourceClass.name}" -> "${targetClass.name}"`);
+			this.createNewRelationshipFromEdit(canvasSourceElement.id, canvasTargetElement.id, editedRelation);
+			return;
+		}
+
+		//console.log(`🔗 Actualizando relación existente: ${originalRelation.type} -> ${editedRelation.type}`);
+		// Crear una versión segura del editedRelation que use IDs reales del canvas
+		const safeEditedRelation = {
+			...editedRelation,
+			sourceId: canvasSourceElement.id, // Usar IDs reales del canvas
+			targetId: canvasTargetElement.id  // Usar IDs reales del canvas
+		};
+		this.applyRelationshipChanges(existingLink, safeEditedRelation);
+	}
+
+	/**
+	 * Crea una nueva relación basada en los datos de edición
+	 */
+	private createNewRelationshipFromEdit(sourceId: string, targetId: string, editedRelation: any) {
+		const newLink = this.createTypedRelationship(sourceId, targetId, editedRelation.type, true);
+		
+		// Aplicar cardinalidades si existen
+		if (editedRelation.labels && Array.isArray(editedRelation.labels)) {
+			//console.log(`🏷️ Aplicando cardinalidades a nueva relación:`, editedRelation.labels);
+			
+			// Filtrar etiquetas válidas
+			const validLabels = editedRelation.labels.filter((label: string) => 
+				label && typeof label === 'string' && label.trim() !== ''
+			);
+			
+			if (validLabels.length > 0) {
+				const newLabels = validLabels.map((labelText: string, index: number) => ({
+					position: { 
+						distance: index === 0 ? 20 : -20, 
+						offset: index === 0 ? -10 : 10 
+					},
+					attrs: { 
+						text: { 
+							text: labelText.trim(), 
+							fill: '#333', 
+							fontSize: 12,
+							fontWeight: 'bold'
+						} 
+					},
+					markup: [{ tagName: 'text', selector: 'text' }]
+				}));
+				
+				newLink.set('labels', newLabels);
+				//console.log(`✅ Cardinalidades aplicadas a nueva relación:`, validLabels);
+			}
+		}
+
+		// Broadcast para colaboración
+		this.collab.broadcast({
+			t: 'move_link',
+			id: newLink.id,
+			sourceId: sourceId,
+			targetId: targetId
+		});
+
+		// Broadcast para etiquetas/cardinalidades
+		if (editedRelation.labels && Array.isArray(editedRelation.labels)) {
+			const validLabels = editedRelation.labels.filter((label: string) => 
+				label && typeof label === 'string' && label.trim() !== ''
+			);
+			
+			validLabels.forEach((labelText: string, index: number) => {
+				this.collab.broadcast({
+					t: 'edit_label',
+					linkId: newLink.id,
+					index: index,
+					text: labelText.trim()
+				});
+				//console.log(`📡 Broadcast cardinalidad nueva relación ${index}: "${labelText.trim()}"`);
+			});
+		}
+
+		//console.log(`✅ Nueva relación ${editedRelation.type} creada exitosamente`);
+	}
+
+	/**
+	 * Aplica los cambios específicos a una relación encontrada
+	 */
+	private applyRelationshipChanges(existingLink: any, editedRelation: any) {
+		// 1. Actualizar tipo de relación
+		if (editedRelation.type) {
+			const newAttrs = this.relationAttrs[editedRelation.type] || this.relationAttrs.association;
+			existingLink.attr(newAttrs);
+			existingLink.set('relationType', editedRelation.type);
+			//console.log(`✏️ Tipo de relación actualizado: ${editedRelation.type}`);
+		}
+
+		// 2. NO actualizar conexiones (sourceId/targetId) aquí
+		// Las conexiones ya están correctas porque encontramos la relación por estas conexiones
+		// Cambiar las conexiones requeriría buscar las clases por nombre primero
+		
+		// Si necesitáramos cambiar conexiones, primero verificaríamos que las celdas existan:
+		if (editedRelation.sourceId && editedRelation.sourceId !== existingLink.get('source')?.id) {
+			const sourceCell = this.graph.getCell(editedRelation.sourceId);
+			if (sourceCell && sourceCell.isElement?.()) {
+				existingLink.source({ id: editedRelation.sourceId });
+				//onsole.log(`✏️ Origen actualizado: ${editedRelation.sourceId}`);
+			} else {
+				console.warn(`⚠️ No se pudo cambiar origen - celda ${editedRelation.sourceId} no existe`);
+			}
+		}
+
+		if (editedRelation.targetId && editedRelation.targetId !== existingLink.get('target')?.id) {
+			const targetCell = this.graph.getCell(editedRelation.targetId);
+			if (targetCell && targetCell.isElement?.()) {
+				existingLink.target({ id: editedRelation.targetId });
+				//console.log(`✏️ Destino actualizado: ${editedRelation.targetId}`);
+			} else {
+				console.warn(`⚠️ No se pudo cambiar destino - celda ${editedRelation.targetId} no existe`);
+			}
+		}
+
+		// 3. Actualizar etiquetas (cardinalidades)
+		if (editedRelation.labels && Array.isArray(editedRelation.labels)) {
+			//console.log(`🏷️ Aplicando cardinalidades del JSON editado:`, editedRelation.labels);
+			
+			// Filtrar etiquetas vacías
+			const validLabels = editedRelation.labels.filter((label: string) => 
+				label && typeof label === 'string' && label.trim() !== ''
+			);
+			
+			if (validLabels.length > 0) {
+				const newLabels = validLabels.map((labelText: string, index: number) => ({
+					position: { 
+						distance: index === 0 ? 20 : -20, 
+						offset: index === 0 ? -10 : 10 
+					},
+					attrs: { 
+						text: { 
+							text: labelText.trim(), 
+							fill: '#333', 
+							fontSize: 12,
+							fontWeight: 'bold'
+						} 
+					},
+					markup: [{ tagName: 'text', selector: 'text' }]
+				}));
+				
+				// Limpiar etiquetas anteriores y aplicar las nuevas
+				existingLink.set('labels', []);
+				existingLink.set('labels', newLabels);
+				
+				//console.log(`✅ Cardinalidades aplicadas exitosamente:`, validLabels);
+				//console.log(`📍 Posiciones: ${validLabels.length > 0 ? 'origen' : ''} ${validLabels.length > 1 ? 'destino' : ''}`);
+			} else {
+				// Si no hay etiquetas válidas, limpiar las existentes
+				existingLink.set('labels', []);
+				//console.log(`🧹 Cardinalidades limpiadas (no había etiquetas válidas)`);
+			}
+		} else if (editedRelation.labels === null || editedRelation.labels === undefined) {
+			// Si labels es null/undefined, mantener las etiquetas existentes
+			//console.log(`➡️ Manteniendo cardinalidades existentes (no especificadas en edición)`);
+		} else {
+			// Si labels existe pero no es array, limpiar
+			existingLink.set('labels', []);
+			//console.log(`🧹 Cardinalidades limpiadas (formato inválido)`);
+		}
+
+		// 4. Broadcast para colaboración - usando mensajes existentes
+		if (editedRelation.sourceId || editedRelation.targetId) {
+			this.collab.broadcast({
+				t: 'move_link',
+				id: existingLink.id,
+				sourceId: editedRelation.sourceId || existingLink.get('source')?.id,
+				targetId: editedRelation.targetId || existingLink.get('target')?.id
+			});
+		}
+
+		// Broadcast para actualización de etiquetas si cambiaron
+		if (editedRelation.labels && Array.isArray(editedRelation.labels)) {
+			const validLabels = editedRelation.labels.filter((label: string) => 
+				label && typeof label === 'string' && label.trim() !== ''
+			);
+			
+			validLabels.forEach((labelText: string, index: number) => {
+				this.collab.broadcast({
+					t: 'edit_label',
+					linkId: existingLink.id,
+					index: index,
+					text: labelText.trim()
+				});
+				//console.log(`📡 Broadcast cardinalidad ${index}: "${labelText.trim()}"`);
+			});
+		}
+
+		//console.log('✅ Relación actualizada exitosamente');
+	}
+
 	// Exporta el estado actual del diagrama a JSON
 	exportToJson() {
 		if (!this.graph) return null;
@@ -1301,6 +1588,58 @@ export class DiagramService {
 			this.paper.translate(this.pan.x, this.pan.y);
 		}
 	}
+	/**
+	 * Función de prueba para editar relaciones - puedes llamarla desde la consola del navegador
+	 */
+	testEditRelationship() {
+		const links = this.graph.getLinks();
+		if (links.length === 0) {
+			console.log('❌ No hay relaciones para editar');
+			return;
+		}
+		
+		const firstLink = links[0];
+		const sourceId = firstLink.get('source')?.id;
+		const targetId = firstLink.get('target')?.id;
+		
+		// Buscar las clases en el canvas para crear ejemplo realista
+		const sourceElement = this.graph.getCell(sourceId);
+		const targetElement = this.graph.getCell(targetId);
+		
+		if (!sourceElement || !targetElement) {
+			console.log('❌ No se pudieron encontrar las clases origen/destino');
+			return;
+		}
+		
+		console.log(`🔗 Editando relación: ${sourceElement.get('name')} -> ${targetElement.get('name')}`);
+		
+		// Simular datos como los que vendrían del JSON
+		const originalRelationships = [{
+			id: 'test_rel_id',
+			type: firstLink.get('relationType') || 'association',
+			sourceId: 'source_class_id',
+			targetId: 'target_class_id',
+			labels: []
+		}];
+		
+		const originalClasses = [
+			{ id: 'source_class_id', name: sourceElement.get('name') },
+			{ id: 'target_class_id', name: targetElement.get('name') }
+		];
+		
+		// Ejemplo de edición: cambiar tipo y etiquetas
+		const editedRel = {
+			id: 'test_rel_id',
+			type: 'composition',
+			sourceId: 'source_class_id',
+			targetId: 'target_class_id',
+			labels: ['1', '0..*'],
+			editado: true
+		};
+		
+		this.updateRelationship(editedRel, originalRelationships, originalClasses);
+	}
+
 	exportToImage(fileName: string = 'diagram.png') {
 		if (!this.paper) {
 			console.error('❌ Paper no inicializado');
