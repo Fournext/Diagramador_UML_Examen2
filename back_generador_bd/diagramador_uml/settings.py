@@ -58,7 +58,7 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("redis_server", 6379)],  # el nombre del servicio en docker-compose
+            "hosts": [("127.0.0.1", 6379)],  # el nombre del servicio en docker-compose
         },
     },
 }

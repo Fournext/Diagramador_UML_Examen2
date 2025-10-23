@@ -9,6 +9,12 @@ def call_gemini(prompt: str):
     headers = {"Content-Type": "application/json"}
     params = {"key": GEMINI_API_KEY}
 
+    # Detectar si es una solicitud de eliminación
+    delete_keywords = ["eliminar", "elimina", "borra", "borrar", 
+                      "quitar", "quita", "remover", "remueve",
+                      "sacar", "saca", "delete", "remove"]
+    is_delete_request = any(keyword in prompt.lower() for keyword in delete_keywords)
+
     # Detectar si es una solicitud de edición
     edit_keywords = ["cambies","cambiar", "cambia",
                      "edites","edita","editar", 
@@ -18,7 +24,63 @@ def call_gemini(prompt: str):
                     ]
     is_edit_request = any(keyword in prompt.lower() for keyword in edit_keywords)
 
-    if is_edit_request:
+    if is_delete_request:
+        # Prompt para eliminación - devolver un solo JSON con marcadores de eliminación
+        prompt_text = f"""
+Analiza el siguiente prompt de eliminación y devuelve UN SOLO JSON con los elementos marcados para eliminar.
+
+IMPORTANTE: El usuario quiere ELIMINAR elementos (clases, atributos, métodos o relaciones). Debes:
+
+1. Identificar QUÉ se debe eliminar según el prompt
+2. Marcar esos elementos con "eliminar": true
+3. Devolver SOLO los elementos que se deben eliminar
+
+Formato de respuesta:
+```json
+{{
+  "classes": [
+    {{
+      "id": "uuid_o_nombre_clase",
+      "name": "NombreClase",
+      "eliminar": true,
+      "attributes": [
+        {{"name": "atributo_a_eliminar", "type": "tipo", "eliminar": true}}
+      ],
+      "methods": [
+        {{"name": "metodo_a_eliminar", "parameters": "", "returnType": "", "eliminar": true}}
+      ]
+    }}
+  ],
+  "relationships": [
+    {{
+      "id": "uuid_relacion",
+      "type": "association | generalization | aggregation | composition | dependency",
+      "sourceId": "nombre_clase_origen",
+      "targetId": "nombre_clase_destino",
+      "eliminar": true
+    }}
+  ]
+}}
+```
+
+REGLAS IMPORTANTES:
+- Si se debe eliminar UNA CLASE COMPLETA, marca la clase con "eliminar": true y NO incluyas attributes/methods
+- Si se debe eliminar UN ATRIBUTO específico, incluye solo ese atributo con "eliminar": true dentro de la clase
+- Si se debe eliminar UN MÉTODO específico, incluye solo ese método con "eliminar": true dentro de la clase
+- Si se debe eliminar UNA RELACIÓN, márcala con "eliminar": true e identifícala por sourceId/targetId (nombres de clases)
+- Usa nombres de clases (no UUIDs) para sourceId y targetId en relaciones
+- NO incluyas elementos que NO se deben eliminar
+- NO devuelvas nada más, solo el JSON
+
+Ejemplos:
+- "elimina la clase Usuario" → {{"classes": [{{"name": "Usuario", "eliminar": true}}]}}
+- "quita el atributo edad de Persona" → {{"classes": [{{"name": "Persona", "attributes": [{{"name": "edad", "eliminar": true}}]}}]}}
+- "borra la relación entre Persona y Cliente" → {{"relationships": [{{"sourceId": "Persona", "targetId": "Cliente", "eliminar": true}}]}}
+
+Prompt del usuario:
+{prompt}
+"""
+    elif is_edit_request:
         # Prompt para edición - devolver dos JSONs
         prompt_text = f"""
 Analiza el siguiente prompt de edición y devuelve DOS JSONs separados:
