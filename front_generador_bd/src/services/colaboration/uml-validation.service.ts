@@ -4,34 +4,34 @@ import { environment } from '../../environments/environment';
 @Injectable({ providedIn: 'root' })
 export class UmlValidationService {
   private socket?: WebSocket;
-    
-    connect(onResult: (data: any) => void) {
+
+  connect(onResult: (data: any) => void) {
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const host =
-    window.location.protocol === 'https:'
-    ? environment.WebSocket_python
-    : window.location.hostname;
-    
+      window.location.protocol === 'https:'
+        ? environment.WebSocket_python
+        : window.location.hostname;
+
     const port =
-    window.location.protocol === 'https:'
-      ? ''
-      : environment.wsPort
-      ? `:${environment.wsPort}`
-      : '';
+      window.location.protocol === 'https:'
+        ? ''
+        : environment.wsPort
+          ? `:${environment.wsPort}`
+          : '';
 
     this.socket = new WebSocket(`${scheme}://${host}${port}/ws/uml/`);
 
     this.socket.onmessage = (msg) => {
-        try {
+      try {
         const data = JSON.parse(msg.data);
         if (data.action === 'validation_result') {
-            onResult(data);
+          onResult(data);
         }
-        } catch (e) {
+      } catch (e) {
         console.error('Error parseando mensaje de validación', e);
-        }
+      }
     };
-    }
+  }
 
 
   validateModel(umlJson: any) {

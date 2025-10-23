@@ -6,6 +6,8 @@ import { DiagramService } from '../../services/diagram/diagram.service';
 import { UmlValidationService } from '../../services/colaboration/uml-validation.service';
 import { ActivatedRoute, Router } from '@angular/router';
 import { SqlExportService } from '../../services/exports/sql-export.service';
+import { UmlImageServiceTs } from '../../services/imports/uml-image.service';
+
 
 @Component({
   selector: 'app-side-panel',
@@ -15,10 +17,12 @@ import { SqlExportService } from '../../services/exports/sql-export.service';
 })
 export class SidePanel {
   @Output() elementDragged = new EventEmitter<CdkDragEnd>();
-  @Output() saveClicked = new EventEmitter<void>(); 
+  @Output() saveClicked = new EventEmitter<void>();
   @Output() generateClicked = new EventEmitter<string>();
 
   public showActions: boolean = false;
+  public showActionsImports: boolean = false;
+  public showPalette: boolean = true;
 
   prompt: string = '';
   validationCollapsed = signal<boolean>(true);
@@ -36,6 +40,7 @@ export class SidePanel {
     private router: Router,
     private route: ActivatedRoute,
     private sqlExportService: SqlExportService,
+    private umlImageService: UmlImageServiceTs,
     @Inject(PLATFORM_ID) platformId: Object
   ) {
     this.isBrowser = isPlatformBrowser(platformId); // ✅ detecta si estamos en navegador
@@ -45,6 +50,8 @@ export class SidePanel {
       this.configVoiceRecognition();
     }
   }
+
+
 
   onDragEnded(event: CdkDragEnd) {
     this.elementDragged.emit(event);
@@ -56,7 +63,7 @@ export class SidePanel {
   onGenerate() {
     if (this.prompt.trim()) {
       this.generateClicked.emit(this.prompt.trim());
-      this.prompt = ''; 
+      this.prompt = '';
     }
   }
   // para colapsar el panel
@@ -66,7 +73,7 @@ export class SidePanel {
 
   analyzeNow() {
     this.analyzingModel.set(true);
-    const umlJson = this.diagramService.exportToJson(); 
+    const umlJson = this.diagramService.exportToJson();
     this.umlValidation.validateModel(umlJson);
   }
 
@@ -164,4 +171,23 @@ export class SidePanel {
     this.sqlExportService.downloadSql(umlJson, 'diagrama.sql');
   }
 
+  onImportImage(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+
+    const file = input.files[0];
+    this.analyzingModel.set(true);
+
+    this.umlImageService.analyzeImage(file).subscribe({
+      next: (res) => {
+        const umlJson = res.uml_json || res; // depende de la respuesta del backend
+        this.diagramService.loadFromJsonWithTypeDefaults(umlJson);
+        this.analyzingModel.set(false);
+      },
+      error: (err) => {
+        console.error('❌ Error al analizar imagen UML:', err);
+        this.analyzingModel.set(false);
+      }
+    });
+  }
 }

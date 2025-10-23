@@ -58,7 +58,8 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("redis_server", 6379)],  # el nombre del servicio en docker-compose
+            # el nombre del servicio en docker-compose
+            "hosts": [("redis_server", 6379)],
         },
     },
 }
@@ -112,7 +113,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'uml_bd',      # nombre de tu base de datos
         'USER': 'postgres',          # tu usuario de PostgreSQL
-        'PASSWORD': '071104',   # la contraseña de ese usuario
+        'PASSWORD': '6305913',   # la contraseña de ese usuario
         'HOST': 'localhost',         # o la IP del servidor si es remoto
         'PORT': '5432',              # puerto por defecto de PostgreSQL
     }
