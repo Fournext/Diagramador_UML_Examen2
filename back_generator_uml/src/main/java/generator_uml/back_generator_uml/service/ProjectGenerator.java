@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 public class ProjectGenerator {
 
     private final MustacheFactory mustacheFactory;
+    private final PostmanCollectionGenerator postmanCollectionGenerator;
 
     public Path generate(UmlSchema schema, String basePackage, String artifactId) throws Exception {
         Path root = Files.createTempDirectory("gen-" + artifactId);
@@ -362,6 +363,11 @@ public class ProjectGenerator {
             render("Service.mustache", entityCtx, svcDir.resolve(entityName + "Service.java"));
             render("Controller.mustache", entityCtx, ctrlDir.resolve(entityName + "Controller.java"));
         }
+
+        // ====== GENERAR COLECCIÓN DE POSTMAN ======
+        Path postmanJson = postmanCollectionGenerator.generatePostmanCollection(schema, "http://localhost:9000", artifactId);
+        Files.copy(postmanJson, root.resolve(artifactId + "-postman-collection.json"));
+        Files.deleteIfExists(postmanJson); // Limpiar temporal
 
         Path zip = root.getParent().resolve(artifactId + ".zip");
         ZipUtil.pack(root.toFile(), zip.toFile());
