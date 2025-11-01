@@ -41,12 +41,38 @@ public class PostmanCollectionGenerator {
             folder.put("name", entityName);
             ArrayNode folderItems = folder.putArray("item");
 
-            // Detectar PK
-            String pkType = "Long";
+            // Detectar PK considerando herencia
+            String pkType = "String";
             String pkName = "id";
-            if (!c.getAttributes().isEmpty()) {
-                pkType = TypeMapper.toJava(c.getAttributes().get(0).getType());
+            
+            // Detectar si tiene padre (herencia)
+            final String[] parentClassNameHolder = {null};
+            for (var rel : schema.getRelationships()) {
+                if ("generalization".equals(rel.getType()) && rel.getSourceId().equals(c.getId())) {
+                    parentClassNameHolder[0] = schema.getClasses().stream()
+                            .filter(pc -> pc.getId().equals(rel.getTargetId()))
+                            .map(UmlClass::getName)
+                            .findFirst().orElse(null);
+                    break;
+                }
+            }
+            
+            // Si tiene padre, buscar PK en el padre
+            if (parentClassNameHolder[0] != null) {
+                final String parentClassName = parentClassNameHolder[0];
+                UmlClass parent = schema.getClasses().stream()
+                        .filter(pc -> pc.getName().equals(parentClassName))
+                        .findFirst().orElse(null);
+                
+                if (parent != null && !parent.getAttributes().isEmpty()) {
+                    // El primer atributo del padre es la PK
+                    pkName = NamingUtil.toField(parent.getAttributes().get(0).getName());
+                    pkType = TypeMapper.toJava(parent.getAttributes().get(0).getType());
+                }
+            } else if (!c.getAttributes().isEmpty()) {
+                // Si NO tiene padre, el primer atributo es la PK
                 pkName = NamingUtil.toField(c.getAttributes().get(0).getName());
+                pkType = TypeMapper.toJava(c.getAttributes().get(0).getType());
             }
 
             // GET All
@@ -57,6 +83,7 @@ public class PostmanCollectionGenerator {
 
             // POST Create
             folderItems.add(createPostRequest(entityName, pluralName, c, schema));
+
 
             // PUT Update
             folderItems.add(createPutRequest(entityName, pluralName, c, schema, pkType, pkName));
@@ -211,7 +238,7 @@ public class PostmanCollectionGenerator {
             }
         }
 
-        // Atributos del padre
+        // Atributos del padre (si hay herencia)
         if (parentClass != null) {
             String finalParentClass = parentClass;
             UmlClass parent = schema.getClasses().stream()
@@ -224,19 +251,30 @@ public class PostmanCollectionGenerator {
                     String fieldName = NamingUtil.toField(attr.getName());
                     String type = TypeMapper.toJava(attr.getType());
 
-                    if (i == 0 && !includeId) continue;
+                    // El primer atributo del padre es la PK
+                    // Solo incluirlo si includeId es true
+                    if (i == 0 && !includeId) {
+                        continue;
+                    }
+
                     body.set(fieldName, generateSampleValue(type, fieldName));
                 }
             }
         }
 
-        // Atributos propios
+        // Atributos propios de la clase
+        // Si tiene padre, NINGUNO de estos es PK
+        // Si NO tiene padre, el primero es PK
         for (int i = 0; i < c.getAttributes().size(); i++) {
             var attr = c.getAttributes().get(i);
             String fieldName = NamingUtil.toField(attr.getName());
             String type = TypeMapper.toJava(attr.getType());
 
-            if (i == 0 && !includeId && parentClass == null) continue;
+            // Si NO tiene padre y es el primer atributo, es la PK
+            if (parentClass == null && i == 0 && !includeId) {
+                continue;
+            }
+
             body.set(fieldName, generateSampleValue(type, fieldName));
         }
 
@@ -272,7 +310,9 @@ public class PostmanCollectionGenerator {
                                 "composition".equals(rel.getType()) ||
                                 "dependency".equals(rel.getType()))) {
 
-                    if ((sourceIsMany && !targetIsMany) || (!sourceIsMany && !targetIsMany)) {
+                    // Si source tiene cardinalidad * hacia target
+                    // entonces Source tiene ManyToOne → incluir FK
+                    if (sourceIsMany && !targetIsMany) {
                         String targetEntity = NamingUtil.toJavaClass(targetName);
                         String fieldName = NamingUtil.toField(targetEntity);
 
@@ -285,6 +325,52 @@ public class PostmanCollectionGenerator {
                             ObjectNode relObj = objectMapper.createObjectNode();
                             String pkFieldName = NamingUtil.toField(targetClass.getAttributes().get(0).getName());
                             relObj.set(pkFieldName, generateSampleValue(targetPkType, pkFieldName));
+                            body.set(fieldName, relObj);
+                        }
+                    }
+                    // Si source tiene cardinalidad 1 y target tiene 1 (OneToOne o Composition)
+                    else if (!sourceIsMany && !targetIsMany) {
+                        String targetEntity = NamingUtil.toJavaClass(targetName);
+                        String fieldName = NamingUtil.toField(targetEntity);
+
+                        UmlClass targetClass = schema.getClasses().stream()
+                                .filter(tc -> tc.getName().equals(targetName))
+                                .findFirst().orElse(null);
+
+                        if (targetClass != null && !targetClass.getAttributes().isEmpty()) {
+                            String targetPkType = TypeMapper.toJava(targetClass.getAttributes().get(0).getType());
+                            ObjectNode relObj = objectMapper.createObjectNode();
+                            String pkFieldName = NamingUtil.toField(targetClass.getAttributes().get(0).getName());
+                            relObj.set(pkFieldName, generateSampleValue(targetPkType, pkFieldName));
+                            body.set(fieldName, relObj);
+                        }
+                    }
+                    // Si source=1 y target=many → Source tiene OneToMany, no incluir FK
+                    // Si source=many y target=many → ManyToMany, no incluir FK en body simple
+                }
+                
+                // Lado TARGET: si target tiene cardinalidad many y source tiene 1
+                // entonces Target tiene ManyToOne hacia Source
+                if (c.getName().equals(targetName) &&
+                        ("association".equals(rel.getType()) ||
+                                "aggregation".equals(rel.getType()) ||
+                                "composition".equals(rel.getType()) ||
+                                "dependency".equals(rel.getType()))) {
+
+                    if (targetIsMany && !sourceIsMany) {
+                        // Target (este objeto) tiene ManyToOne hacia Source
+                        String sourceEntity = NamingUtil.toJavaClass(sourceName);
+                        String fieldName = NamingUtil.toField(sourceEntity);
+
+                        UmlClass sourceClass = schema.getClasses().stream()
+                                .filter(sc -> sc.getName().equals(sourceName))
+                                .findFirst().orElse(null);
+
+                        if (sourceClass != null && !sourceClass.getAttributes().isEmpty()) {
+                            String sourcePkType = TypeMapper.toJava(sourceClass.getAttributes().get(0).getType());
+                            ObjectNode relObj = objectMapper.createObjectNode();
+                            String pkFieldName = NamingUtil.toField(sourceClass.getAttributes().get(0).getName());
+                            relObj.set(pkFieldName, generateSampleValue(sourcePkType, pkFieldName));
                             body.set(fieldName, relObj);
                         }
                     }
@@ -334,14 +420,18 @@ public class PostmanCollectionGenerator {
                 || javaType.equalsIgnoreCase("short") || javaType.equalsIgnoreCase("byte");
     }
 
-    private boolean isAutoGeneratedId(UmlClass c) {
-        if (c.getAttributes().isEmpty()) return false;
-        String firstType = TypeMapper.toJava(c.getAttributes().get(0).getType());
-        return isNumericType(firstType);
-    }
-
     private boolean shouldIncludeIdInPost(UmlClass c) {
-        // Si el ID es numérico → autogenerado → no se incluye en POST
-        return !isAutoGeneratedId(c);
+        // El primer atributo de la clase (o del padre si tiene herencia) es la PK
+        // Si es numérica → autogenerada → NO incluir en POST
+        // Si es String → manual → SÍ incluir en POST
+        
+        String pkType = "String";
+        
+        // Buscar el primer atributo (si no tiene atributos, asumir autogenerada)
+        if (!c.getAttributes().isEmpty()) {
+            pkType = TypeMapper.toJava(c.getAttributes().get(0).getType());
+        }
+        
+        return !isNumericType(pkType);
     }
 }

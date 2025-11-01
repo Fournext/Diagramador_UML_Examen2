@@ -1,6 +1,6 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
-from uml_api.services import call_gemini_analysis
+from uml_api.services.services_gemini import call_gemini_analysis
 import re
 class CanvasConsumer(AsyncWebsocketConsumer):
     async def connect(self):
