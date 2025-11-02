@@ -15,10 +15,11 @@ def call_gemini(prompt: str):
     params = {"key": GEMINI_API_KEY}
 
     # Detectar si es una solicitud de eliminación
-    delete_keywords = ["eliminar", "elimina", "borra", "borrar", 
-                      "quitar", "quita", "remover", "remueve",
-                      "sacar", "saca", "delete", "remove"]
-    is_delete_request = any(keyword in prompt.lower() for keyword in delete_keywords)
+    delete_keywords = ["eliminar", "elimina", "borra", "borrar",
+                       "quitar", "quita", "remover", "remueve",
+                       "sacar", "saca", "delete", "remove"]
+    is_delete_request = any(keyword in prompt.lower()
+                            for keyword in delete_keywords)
 
     # Detectar si es una solicitud de edición
     edit_keywords = ["cambies", "cambiar", "cambia",
@@ -315,11 +316,11 @@ Tu objetivo es identificar con precisión:
    Ejemplo de descripción interna que debes realizar (no la devuelvas):
    - "Rombo negro en extremo derecho" → tail.diamond="black"
    - "Rombo blanco en extremo izquierdo" → tail.diamond="white"
-   - "Triángulo vacío grande apuntando hacia Entidad" → head.shape="triangle", head.fill="none", head.size="large"
+   - "Triángulo blanco grande apuntando hacia Entidad" → head.shape="triangle", head.fill="solid", head.size="large"
    - "Triángulo pequeño negro apuntando a Gato" → head.shape="triangle", head.fill="solid", head.size="small"
 
 📘 Reglas UML:
-- Triángulo grande y vacío → `generalization`
+- Triángulo grande blanco → `generalization`
 - Triángulo pequeño y negro → `association`
 - Rombo negro → `composition`
 - Rombo blanco → `aggregation`
