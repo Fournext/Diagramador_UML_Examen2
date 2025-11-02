@@ -10,6 +10,7 @@ import { BackupService } from '../exports/backup.service';
 
 @Injectable({ providedIn: 'root' })
 export class DiagramService {
+
   private joint: any;
   private graph: any;
   private paper: any;
@@ -856,6 +857,13 @@ export class DiagramService {
   loadFromJson(json: any, isStorageLoad: boolean = false) {
     if (!this.graph) return;
 
+    // DETECTAR SI ES UNA ELIMINACIÓN (tiene elementos con "eliminar": true)
+    const hasDeleteMarkers = this.checkForDeleteMarkers(json);
+    if (hasDeleteMarkers) {
+      this.handleDeleteOperation(json);
+      return;
+    }
+
     // DETECTAR SI ES UNA EDICIÓN (tiene estructura original/editado)
     if (json.original && json.editado) {
       this.handleEditOperation(json);
@@ -926,6 +934,193 @@ export class DiagramService {
 
       this.graph.addCell(link);
     });
+  }
+
+  /**
+   * Verifica si el JSON tiene marcadores de eliminación
+   */
+  private checkForDeleteMarkers(json: any): boolean {
+    // Verificar si alguna clase tiene eliminar: true
+    if (json.classes && json.classes.some((cls: any) => cls.eliminar === true)) {
+      return true;
+    }
+
+    // Verificar si alguna clase tiene atributos con eliminar: true
+    if (json.classes && json.classes.some((cls: any) =>
+      cls.attributes && cls.attributes.some((attr: any) => attr.eliminar === true)
+    )) {
+      return true;
+    }
+
+    // Verificar si alguna clase tiene métodos con eliminar: true
+    if (json.classes && json.classes.some((cls: any) =>
+      cls.methods && cls.methods.some((method: any) => method.eliminar === true)
+    )) {
+      return true;
+    }
+
+    // Verificar si alguna relación tiene eliminar: true
+    if (json.relationships && json.relationships.some((rel: any) => rel.eliminar === true)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Maneja operaciones de eliminación cuando llegan elementos marcados con "eliminar": true
+   */
+  private handleDeleteOperation(deleteData: any) {
+    console.log('🗑️ Procesando eliminación de elementos UML', deleteData);
+
+    // 1. Eliminar clases completas
+    if (deleteData.classes) {
+      deleteData.classes.forEach((cls: any) => {
+        if (cls.eliminar === true) {
+          // Eliminar clase completa
+          const existingElement = this.graph.getCells().find((cell: any) => {
+            if (!cell.isElement?.()) return false;
+            return cell.get('name') === cls.name || cell.id === cls.id;
+          });
+
+          if (existingElement) {
+            console.log(`🗑️ Eliminando clase completa: "${cls.name}"`);
+            existingElement.remove();
+
+            // Broadcast para colaboración
+            this.collab.broadcast({
+              t: 'delete',
+              id: existingElement.id
+            });
+          } else {
+            console.warn(`⚠️ No se encontró la clase "${cls.name}" para eliminar`);
+          }
+        } else {
+          // La clase no se elimina completa, pero puede tener atributos/métodos a eliminar
+          const existingElement = this.graph.getCells().find((cell: any) => {
+            if (!cell.isElement?.()) return false;
+            return cell.get('name') === cls.name || cell.id === cls.id;
+          });
+
+          if (!existingElement) {
+            console.warn(`⚠️ No se encontró la clase "${cls.name}"`);
+            return;
+          }
+
+          // 2. Eliminar atributos específicos
+          if (cls.attributes && cls.attributes.length > 0) {
+            const currentAttributes = existingElement.get('attributes') || '';
+            const attrLines = currentAttributes.split('\n').filter((line: string) => line.trim());
+
+            const attributesToDelete = cls.attributes
+              .filter((attr: any) => attr.eliminar === true)
+              .map((attr: any) => attr.name);
+
+            const newAttributes = attrLines.filter((line: string) => {
+              const attrName = line.split(':')[0]?.trim();
+              const shouldDelete = attributesToDelete.includes(attrName);
+              if (shouldDelete) {
+                console.log(`🗑️ Eliminando atributo "${attrName}" de "${cls.name}"`);
+              }
+              return !shouldDelete;
+            }).join('\n');
+
+            existingElement.set('attributes', newAttributes);
+
+            // Broadcast para colaboración
+            this.collab.broadcast({
+              t: 'edit_text',
+              id: existingElement.id,
+              field: 'attributes',
+              value: newAttributes
+            });
+          }
+
+          // 3. Eliminar métodos específicos
+          if (cls.methods && cls.methods.length > 0) {
+            const currentMethods = existingElement.get('methods') || '';
+            const methodLines = currentMethods.split('\n').filter((line: string) => line.trim());
+
+            const methodsToDelete = cls.methods
+              .filter((method: any) => method.eliminar === true)
+              .map((method: any) => method.name);
+
+            const newMethods = methodLines.filter((line: string) => {
+              const methodName = line.split('(')[0]?.trim();
+              const shouldDelete = methodsToDelete.includes(methodName);
+              if (shouldDelete) {
+                console.log(`🗑️ Eliminando método "${methodName}" de "${cls.name}"`);
+              }
+              return !shouldDelete;
+            }).join('\n');
+
+            existingElement.set('methods', newMethods);
+
+            // Broadcast para colaboración
+            this.collab.broadcast({
+              t: 'edit_text',
+              id: existingElement.id,
+              field: 'methods',
+              value: newMethods
+            });
+          }
+
+          // Redimensionar después de eliminar contenido
+          this.edition.scheduleAutoResize(this.paper, existingElement);
+        }
+      });
+    }
+
+    // 4. Eliminar relaciones
+    if (deleteData.relationships) {
+      deleteData.relationships.forEach((rel: any) => {
+        if (rel.eliminar === true) {
+          // Buscar las clases por nombre
+          const sourceElement = this.graph.getCells().find((cell: any) =>
+            cell.isElement?.() && cell.get('name') === rel.sourceId
+          );
+          const targetElement = this.graph.getCells().find((cell: any) =>
+            cell.isElement?.() && cell.get('name') === rel.targetId
+          );
+
+          if (!sourceElement || !targetElement) {
+            console.warn(`⚠️ No se encontraron las clases "${rel.sourceId}" o "${rel.targetId}"`);
+            return;
+          }
+
+          // Buscar la relación entre estas clases
+          const existingLink = this.graph.getLinks().find((link: any) => {
+            const linkSourceId = link.get('source')?.id;
+            const linkTargetId = link.get('target')?.id;
+
+            // Buscar por conexión
+            if (linkSourceId === sourceElement.id && linkTargetId === targetElement.id) {
+              // Si se especifica tipo, verificar que coincida
+              if (rel.type) {
+                return link.get('relationType') === rel.type;
+              }
+              return true;
+            }
+            return false;
+          });
+
+          if (existingLink) {
+            console.log(`🗑️ Eliminando relación entre "${rel.sourceId}" -> "${rel.targetId}"`);
+            existingLink.remove();
+
+            // Broadcast para colaboración
+            this.collab.broadcast({
+              t: 'delete',
+              id: existingLink.id
+            });
+          } else {
+            console.warn(`⚠️ No se encontró relación entre "${rel.sourceId}" -> "${rel.targetId}"`);
+          }
+        }
+      });
+    }
+
+    console.log('✅ Eliminación completada exitosamente');
   }
 
   /**
@@ -1050,10 +1245,7 @@ export class DiagramService {
       //console.log('🔧 Métodos actualizados usando comparación original vs canvas:', finalMethods);
     }
 
-    // 7. Redimensionar automáticamente
-    this.edition.scheduleAutoResize(this.paper, existingElement);
-
-    // 8. Broadcast de la edición para colaboración (enviar múltiples broadcasts)
+    // 7. Broadcast de la edición para colaboración (enviar múltiples broadcasts)
     if (editedClass.name && originalClass.name) {
       // Solo hacer broadcast si se detectó que el nombre debía cambiar
       const currentCanvasName = existingElement.get('name');
@@ -1085,7 +1277,7 @@ export class DiagramService {
       });
     }
 
-    // 9. Actualizar relaciones editadas
+    // 8. Actualizar relaciones editadas
     if (editData.editado.relationships && editData.editado.relationships.length > 0) {
       editData.editado.relationships.forEach((editedRel: any) => {
         if (editedRel.editado) {
@@ -1093,6 +1285,8 @@ export class DiagramService {
         }
       });
     }
+    // 9. Redimensionar automáticamente
+    this.edition.scheduleAutoResize(existingElement, this.paper);
 
     //console.log('✅ Edición completada exitosamente');
   }
@@ -1548,6 +1742,12 @@ export class DiagramService {
     const json = this.exportService.export(this.graph);
     localStorage.setItem(this.storageKey, JSON.stringify(json));
   }
+
+  // Exponer persistencia públicamente para que servicios externos (collab)
+  // puedan forzar el guardado del estado (localStorage / backup)
+  public persistState(): void {
+    this.persist();
+  }
   // Limpia el diagrama guardado en localStorage
   clearStorage() {
     localStorage.removeItem(this.storageKey);
@@ -1690,14 +1890,6 @@ export class DiagramService {
 
     img.src = url;
   }
-  /**
- * Carga un diagrama desde JSON generado por IA o imagen,
- * ignorando las multiplicidades y usando cardinalidades por defecto.
- */
-  /**
- * Carga un diagrama generado (por IA o imagen) aplicando multiplicidades por defecto
- * específicas según el tipo de relación UML.
- */
   loadFromJsonWithTypeDefaults(json: any) {
     if (!this.graph) return;
 
@@ -1756,7 +1948,6 @@ export class DiagramService {
 
     console.log('✅ Diagrama cargado con multiplicidades por tipo de relación');
   }
-
 
 
 }

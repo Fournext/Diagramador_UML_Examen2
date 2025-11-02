@@ -83,7 +83,7 @@ export class CollaborationService {
           } as const;
 
           m.attr(`${map[op.field]}/text`, op.value);
-
+          m.set(op.field, op.value);
           if (!this.api || !this.api.getEdition) {
             console.warn('[Collab] API no soporta getEdition');
             break;
@@ -155,6 +155,7 @@ export class CollaborationService {
           };
 
           link.insertLabel(op.index, label);
+          link.set('labels', link.labels());
           link.trigger('change:labels', link, link.labels());
           break;
         }
@@ -171,6 +172,7 @@ export class CollaborationService {
             attrs: { ...lbl.attrs, text: { ...lbl.attrs?.text, text: op.text } },
             markup: lbl.markup || [{ tagName: 'text', selector: 'text' }]
           });
+          link.set('labels', link.labels());
           link.trigger('change:labels', link, link.labels());
           break;
         }
@@ -187,6 +189,7 @@ export class CollaborationService {
             position: op.position,
             markup: lbl.markup || [{ tagName: 'text', selector: 'text' }]
           });
+          link.set('labels', link.labels());
           link.trigger('change:labels', link, link.labels());
           break;
         }
@@ -195,6 +198,7 @@ export class CollaborationService {
           const link = graph.getCell(op.linkId);
           if (!link) break;
           link.removeLabel(op.index);
+          link.set('labels', link.labels()); 
           link.trigger('change:labels', link, link.labels());
           break;
         }
