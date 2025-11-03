@@ -1,4 +1,4 @@
-import { Component, Output, EventEmitter, PLATFORM_ID, Inject, signal } from '@angular/core';
+import { Component, Output, EventEmitter, PLATFORM_ID, Inject, signal, inject } from '@angular/core';
 import { CommonModule, isPlatformBrowser } from '@angular/common';
 import { DragDropModule, CdkDragEnd, CdkDragStart } from '@angular/cdk/drag-drop';
 import { FormsModule } from '@angular/forms';
@@ -7,6 +7,7 @@ import { UmlValidationService } from '../../services/colaboration/uml-validation
 import { ActivatedRoute, Router } from '@angular/router';
 import { SqlExportService } from '../../services/exports/sql-export.service';
 import { UmlImageServiceTs } from '../../services/imports/uml-image.service';
+import { FrontendGeneratorService } from '../../services/exports/frontend-generator.service';
 
 
 @Component({
@@ -16,6 +17,7 @@ import { UmlImageServiceTs } from '../../services/imports/uml-image.service';
   styleUrl: './side-panel.css'
 })
 export class SidePanel {
+  private frontendGeneratorService = inject(FrontendGeneratorService);
   @Output() elementDragged = new EventEmitter<CdkDragEnd>();
   @Output() saveClicked = new EventEmitter<void>();
   @Output() generateClicked = new EventEmitter<string>();
@@ -190,4 +192,11 @@ export class SidePanel {
       }
     });
   }
+
+  onGenerateFrontend() {
+    const umlJson = this.diagramService.exportToJson();
+    this.frontendGeneratorService.generateFrontend(umlJson);
+  }
+
+
 }
