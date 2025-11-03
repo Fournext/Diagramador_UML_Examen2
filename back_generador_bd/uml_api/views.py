@@ -1,15 +1,21 @@
-from unittest import result
+import tempfile
+from django.http import FileResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .models import BackupUML
-from .services import call_gemini
 import json
 import re
+
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 import base64
-from .services import call_gemini_from_image
+from .services.services_gemini import call_gemini, call_gemini_from_image
+
+
+from pathlib import Path
+from .services.flutter_generator import FlutterCRUDGenerator
+from .utils.zip_utils import compress_folder_to_zip
 
 
 class GenerateUMLView(APIView):
@@ -100,3 +106,36 @@ def analyze_uml_image(request):
         parsed = {"raw": result, "error": "No se pudo parsear correctamente"}
 
     return Response({"uml_json": parsed}, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+def generar_flutter(request):
+    """
+    Genera un proyecto Flutter completo a partir de un JSON UML.
+    Devuelve un ZIP descargable.
+    """
+    try:
+        uml_json = request.data
+        if not uml_json.get("classes"):
+            return Response({"error": "El JSON UML debe contener 'classes'."}, status=400)
+
+        # Crear carpeta temporal
+        temp_dir = Path(tempfile.mkdtemp())
+
+        # Generar el proyecto Flutter
+        generator = FlutterCRUDGenerator(uml_json)
+        generator.generate_project(output_dir=temp_dir / "flutter_app")
+
+        # Comprimir el resultado
+        zip_path = compress_folder_to_zip(temp_dir / "flutter_app")
+
+        # Devolver como archivo descargable
+        response = FileResponse(
+            open(zip_path, "rb"),
+            as_attachment=True,
+            filename="flutter_project.zip"
+        )
+        return response
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

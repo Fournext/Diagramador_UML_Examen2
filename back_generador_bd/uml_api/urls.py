@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import GenerateUMLView, set_backupUML, get_backupUML, analyze_uml_image
+from .views import GenerateUMLView, set_backupUML, get_backupUML, analyze_uml_image, generar_flutter
 
 
 urlpatterns = [
@@ -8,4 +8,5 @@ urlpatterns = [
     path("get_backup_uml/<uuid:room_id>/", get_backupUML, name="backup_uml-id"),
     path("uml_from_image/", analyze_uml_image, name="uml-from-image"),
 
+    path("generar_flutter/", generar_flutter, name="generar-flutter"),
 ]

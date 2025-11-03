@@ -2,6 +2,8 @@ package {{basePackage}}.model;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 import lombok.experimental.SuperBuilder;
@@ -14,7 +16,10 @@ import com.fasterxml.jackson.annotation.*;
 
 @Entity
 @Data
+@Getter
+@Setter
 @NoArgsConstructor
+@AllArgsConstructor
 @SuperBuilder
 {{#isParent}}
     @Inheritance(strategy = InheritanceType.JOINED)
@@ -35,15 +40,15 @@ public class {{EntityName}}{{#parentClass}} extends {{parentClass}}{{/parentClas
 {{/attributes}}
 
 {{#manyToOne}}
-    @ManyToOne
-    @JsonBackReference
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "{{targetField}}_id")
+    @JsonIgnoreProperties(value = {"hibernateLazyInitializer", "handler"}, allowSetters = true)
     private {{TargetEntity}} {{targetField}};
 {{/manyToOne}}
 
 {{#oneToMany}}
-    @OneToMany(mappedBy = "{{mappedBy}}", cascade = CascadeType.ALL, orphanRemoval = true)
-    @JsonManagedReference
+    @OneToMany(mappedBy = "{{mappedBy}}", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @JsonIgnoreProperties(value = {"{{mappedBy}}"}, allowSetters = true)
     private List<{{TargetEntity}}> {{collectionField}} = new ArrayList<>();
 {{/oneToMany}}
 
@@ -53,7 +58,6 @@ public class {{EntityName}}{{#parentClass}} extends {{parentClass}}{{/parentClas
         @OnDelete(action = OnDeleteAction.CASCADE)
     {{/composition}}
     @JoinColumn(name = "{{targetField}}_id")
-    @JsonManagedReference
     private {{TargetEntity}} {{targetField}};
 {{/oneToOne}}
 
@@ -64,7 +68,6 @@ public class {{EntityName}}{{#parentClass}} extends {{parentClass}}{{/parentClas
     joinColumns = @JoinColumn(name = "{{thisTable}}_id"),
     inverseJoinColumns = @JoinColumn(name = "{{otherTable}}_id")
     )
-    @JsonManagedReference
     private Set<{{TargetEntity}}> {{collectionField}} = new HashSet<>();
 {{/manyToMany}}
 

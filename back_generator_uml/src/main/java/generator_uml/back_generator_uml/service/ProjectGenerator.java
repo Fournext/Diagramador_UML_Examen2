@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 public class ProjectGenerator {
 
     private final MustacheFactory mustacheFactory;
+    private final PostmanCollectionGenerator postmanCollectionGenerator;
 
     public Path generate(UmlSchema schema, String basePackage, String artifactId) throws Exception {
         Path root = Files.createTempDirectory("gen-" + artifactId);
@@ -87,6 +88,8 @@ public class ProjectGenerator {
             String pkName = null;
             String pkType = null;
 
+            // Si tiene padre (herencia), NO debe asignar PK propia
+            // La PK viene del padre
             for (var attr : c.getAttributes()) {
                 Map<String, Object> a = new HashMap<>();
                 String type = TypeMapper.toJava(attr.getType());
@@ -99,6 +102,7 @@ public class ProjectGenerator {
                         || type.equalsIgnoreCase("short")
                         || type.equalsIgnoreCase("byte");
 
+                // SOLO asignar PK si NO tiene padre Y es el primer atributo Y no se ha asignado aún
                 if (!isChild && !pkAssigned) {
                     if (isNumeric) {
                         a.put("isId", true);
@@ -121,6 +125,7 @@ public class ProjectGenerator {
                         a.put("type", type);
                     }
                 } else {
+                    // Si tiene padre, TODOS los atributos son normales (no PK)
                     a.put("isId", false);
                     a.put("type", type);
                 }
@@ -191,14 +196,6 @@ public class ProjectGenerator {
                         boolean sourceIsMany = sourceCard.contains("*");
                         boolean targetIsMany = targetCard.contains("*");
 
-                        // (opcional) tipo PK target, si lo necesitas
-                        UmlClass targetClassObj = schema.getClasses().stream()
-                                .filter(pc -> pc.getName().equals(targetName))
-                                .findFirst().orElse(null);
-                        String targetPkType = "Long";
-                        if (targetClassObj != null && !targetClassObj.getAttributes().isEmpty()) {
-                            targetPkType = TypeMapper.toJava(targetClassObj.getAttributes().get(0).getType());
-                        }
                         // 👇 Nuevo: nunca dejes que dependency sea tratado como 1..1
                         if ("dependency".equals(rel.getType()) && !sourceIsMany && !targetIsMany) {
                             sourceIsMany = true;
@@ -208,12 +205,11 @@ public class ProjectGenerator {
 
                         // === Lado SOURCE = esta clase ===
                         if (c.getName().equals(sourceName)) {
-                            if (!sourceIsMany && targetIsMany) {
-                                // 1..* => OneToMany en source
-                                oneToMany.add(Map.of(
+                            if (sourceIsMany && !targetIsMany) {
+                                // source *..1 target => Source tiene ManyToOne hacia Target
+                                manyToOne.add(Map.of(
                                         "TargetEntity", targetEntity,
-                                        "collectionField", NamingUtil.plural(NamingUtil.toField(targetEntity)),
-                                        "mappedBy", NamingUtil.toField(sourceEntity)
+                                        "targetField", NamingUtil.toField(targetEntity)
                                 ));
                             } else if (!sourceIsMany && !targetIsMany) {
                                 // 1..1 => OneToOne
@@ -230,34 +226,35 @@ public class ProjectGenerator {
                                 // *..* => ManyToMany
                                 manyToMany.add(Map.of(
                                         "TargetEntity", targetEntity,
-                                        "collectionField", NamingUtil.plural(NamingUtil.toField(targetEntity)),
+                                        "collectionField", NamingUtil.toField(targetEntity),
                                         "joinTable", sourceEntity.toLowerCase() + "_" + targetEntity.toLowerCase(),
                                         "thisTable", sourceEntity.toLowerCase(),
                                         "otherTable", targetEntity.toLowerCase()
                                 ));
-                            } else if (sourceIsMany && !targetIsMany) {
-                                // *..1 => ManyToOne
-                                manyToOne.add(Map.of(
+                            } else if (!sourceIsMany && targetIsMany) {
+                                // source 1..* target => Source tiene OneToMany
+                                oneToMany.add(Map.of(
                                         "TargetEntity", targetEntity,
-                                        "targetField", NamingUtil.toField(targetEntity)
+                                        "collectionField", NamingUtil.toField(targetEntity),
+                                        "mappedBy", NamingUtil.toField(sourceEntity)
                                 ));
                             }
                         }
 
                         // === Lado TARGET = esta clase (inversos) ===
                         if (c.getName().equals(targetName)) {
-                            if (targetIsMany && !sourceIsMany) {
-                                // 1..* => ManyToOne en target hacia source
+                            if (!targetIsMany && sourceIsMany) {
+                                // source *..1 target => Target tiene OneToMany hacia Source
+                                oneToMany.add(Map.of(
+                                        "TargetEntity", sourceEntity,
+                                        "collectionField", NamingUtil.toField(sourceEntity),
+                                        "mappedBy", NamingUtil.toField(targetEntity)
+                                ));
+                            } else if (targetIsMany && !sourceIsMany) {
+                                // source 1..* target => Target tiene ManyToOne hacia Source
                                 manyToOne.add(Map.of(
                                         "TargetEntity", sourceEntity,
                                         "targetField", NamingUtil.toField(sourceEntity)
-                                ));
-                            } else if (!targetIsMany && sourceIsMany) {
-                                // *..1 => OneToMany en target
-                                oneToMany.add(Map.of(
-                                        "TargetEntity", sourceEntity,
-                                        "collectionField", NamingUtil.plural(NamingUtil.toField(sourceEntity)),
-                                        "mappedBy", NamingUtil.toField(targetEntity)
                                 ));
                             }
                             // 1..1 y *..* no se duplican si ya lo generaste en source
@@ -338,19 +335,32 @@ public class ProjectGenerator {
                     String parentPkName = NamingUtil.toField(parent.getAttributes().get(0).getName());
                     String parentPkType = TypeMapper.toJava(parent.getAttributes().get(0).getType());
                     String pkSetter = "set" + Character.toUpperCase(parentPkName.charAt(0)) + parentPkName.substring(1);
+                    String pkGetter = "get" + Character.toUpperCase(parentPkName.charAt(0)) + parentPkName.substring(1);
+                    
+                    // Determinar si la PK del padre es autogenerada (numérica)
+                    boolean pkGenerated = isNumericType(parentPkType);
 
                     entityCtx.put("pkName", parentPkName);
                     entityCtx.put("pkType", parentPkType);
                     entityCtx.put("pkSetter", pkSetter);
+                    entityCtx.put("pkGetter", pkGetter);
+                    entityCtx.put("pkGenerated", pkGenerated);
                     entityCtx.put("hasPk", true);
                 } else {
                     entityCtx.put("hasPk", false);
                 }
             } else if (pkAssigned) {
                 String pkSetter = "set" + Character.toUpperCase(pkName.charAt(0)) + pkName.substring(1);
+                String pkGetter = "get" + Character.toUpperCase(pkName.charAt(0)) + pkName.substring(1);
+                
+                // Determinar si es autogenerada basándose en el tipo
+                boolean pkGenerated = isNumericType(pkType);
+                
                 entityCtx.put("pkName", pkName);
                 entityCtx.put("pkType", pkType);
                 entityCtx.put("pkSetter", pkSetter);
+                entityCtx.put("pkGetter", pkGetter);
+                entityCtx.put("pkGenerated", pkGenerated);
                 entityCtx.put("hasPk", true);
             } else {
                 entityCtx.put("hasPk", false);
@@ -363,9 +373,20 @@ public class ProjectGenerator {
             render("Controller.mustache", entityCtx, ctrlDir.resolve(entityName + "Controller.java"));
         }
 
+        // ====== GENERAR COLECCIÓN DE POSTMAN ======
+        Path postmanJson = postmanCollectionGenerator.generatePostmanCollection(schema, "http://localhost:9000", artifactId);
+        Files.copy(postmanJson, root.resolve(artifactId + "-postman-collection.json"));
+        Files.deleteIfExists(postmanJson); // Limpiar temporal
+
         Path zip = root.getParent().resolve(artifactId + ".zip");
         ZipUtil.pack(root.toFile(), zip.toFile());
         return zip;
+    }
+
+    private boolean isNumericType(String javaType) {
+        return javaType.equalsIgnoreCase("int") || javaType.equalsIgnoreCase("Integer")
+                || javaType.equalsIgnoreCase("long") || javaType.equalsIgnoreCase("Long")
+                || javaType.equalsIgnoreCase("short") || javaType.equalsIgnoreCase("byte");
     }
 
     private void render(String template, Map<String, Object> ctx, Path target) throws IOException {
