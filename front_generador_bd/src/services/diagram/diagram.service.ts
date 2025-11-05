@@ -1890,64 +1890,6 @@ export class DiagramService {
 
     img.src = url;
   }
-  loadFromJsonWithTypeDefaults(json: any) {
-    if (!this.graph) return;
-
-    const idMap: Record<string, string> = {};
-
-    // 1️⃣ Crear las clases primero
-    json.classes.forEach((cls: any) => {
-      const newCls = this.createUmlClass({
-        id: cls.id,
-        name: cls.name,
-        position: cls.position || { x: 100, y: 100 },
-        size: cls.size || { width: 180, height: 110 },
-        attributes: cls.attributes,
-        methods: cls.methods
-      }, true);
-      idMap[cls.id] = newCls.id;
-    });
-
-    // 2️⃣ Multiplicidades por tipo de relación
-    const defaultMultiplicities: Record<string, [string, string]> = {
-      association: ['0..1', '1..*'],
-      aggregation: ['1..*', '0..1'],
-      composition: ['1..*', '0..1'],
-      generalization: ['0..1', '1..*'],   // herencia no lleva
-      dependency: ['0..1', '1..*']
-    };
-
-    // 3️⃣ Crear relaciones con esas multiplicidades
-    json.relationships.forEach((rel: any) => {
-      const srcId = idMap[rel.sourceId] || rel.sourceId;
-      const trgId = idMap[rel.targetId] || rel.targetId;
-      const type = rel.type || 'association';
-
-      const link = this.createTypedRelationship(srcId, trgId, type, true);
-      link.set('id', rel.id);
-
-      // Obtener los valores por defecto
-      const [srcMult, trgMult] = defaultMultiplicities[type] || ['0..1', '1..*'];
-
-      // Sobrescribir labels
-      link.set('labels', [
-        {
-          position: { distance: 20, offset: -10 },
-          attrs: { text: { text: srcMult, fill: '#333', fontSize: 12 } },
-          markup: [{ tagName: 'text', selector: 'text' }]
-        },
-        {
-          position: { distance: -20, offset: -10 },
-          attrs: { text: { text: trgMult, fill: '#333', fontSize: 12 } },
-          markup: [{ tagName: 'text', selector: 'text' }]
-        }
-      ]);
-
-      this.graph.addCell(link);
-    });
-
-    console.log('✅ Diagrama cargado con multiplicidades por tipo de relación');
-  }
 
 
 }

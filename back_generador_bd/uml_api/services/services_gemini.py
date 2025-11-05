@@ -303,64 +303,97 @@ def call_gemini_from_image(image_base64: str, mime_type: str = "image/png"):
     # 📘 Prompt mejorado: primero descripción visual, luego JSON UML
     # ===============================================================
     prompt_text = """
-Primero observa cuidadosamente la imagen de un **diagrama de clases UML**.
+Analiza cuidadosamente la imagen de un **diagrama de clases UML**.
 
-Tu objetivo es identificar con precisión:
-1️⃣ Las **clases** (rectángulos) y su contenido textual:
-   - Nombre de la clase
-   - Atributos (`nombre:tipo`)
-   - Métodos (`nombre(parámetros):tipoRetorno`)
+🎯 **OBJETIVO**: Identificar TODAS las clases y relaciones visibles.
 
-2️⃣ Las **relaciones** entre clases y sus símbolos visuales.
-   Antes de generar el JSON, describe brevemente cómo se ve cada extremo del conector.
-   Ejemplo de descripción interna que debes realizar (no la devuelvas):
-   - "Rombo negro en extremo derecho" → tail.diamond="black"
-   - "Rombo blanco en extremo izquierdo" → tail.diamond="white"
-   - "Triángulo blanco grande apuntando hacia Entidad" → head.shape="triangle", head.fill="solid", head.size="large"
-   - "Triángulo pequeño negro apuntando a Gato" → head.shape="triangle", head.fill="solid", head.size="small"
+**PASO 1: Identificar clases**
+Detecta todos los rectángulos que representan clases con:
+- Nombre de la clase (en la parte superior)
+- Atributos en formato `nombre:tipo`
+- Métodos en formato `nombre():tipoRetorno` o `nombre(params):tipoRetorno`
 
-📘 Reglas UML:
-- Triángulo grande blanco → `generalization`
-- Triángulo pequeño y negro → `association`
-- Rombo negro → `composition`
-- Rombo blanco → `aggregation`
-- Línea punteada → `dependency`
+**PASO 2: Identificar relaciones**
+Para CADA línea/conector entre clases, describe:
 
-⚠️ Solo genera el JSON con esta estructura exacta (sin explicaciones):
+📍 **Símbolos en los extremos**:
+- **Triángulo blanco/vacío GRANDE** → indica HERENCIA (generalization)
+- **Rombo blanco/vacío** → indica AGREGACIÓN (aggregation)
+- **Rombo negro/relleno** → indica COMPOSICIÓN (composition)
+- **Flecha simple** o **ningún símbolo** → indica ASOCIACIÓN (association)
+- **Línea punteada** → indica DEPENDENCIA (dependency)
+
+📍 **Ubicación del símbolo**: 
+- Si el símbolo (triángulo, rombo) está en el EXTREMO DERECHO o SUPERIOR de la línea → ese es el HEAD (destino)
+- Si está en el EXTREMO IZQUIERDO o INFERIOR → ese es el TAIL (origen)
+
+📍 **Etiquetas de cardinalidad**: Busca números cerca de los extremos como "1", "0..1", "1..*", "*"
+   - Si una línea tiene etiquetas en AMBOS extremos (ej: "1..*" cerca de Persona y "0..1" cerca de Perro)
+   - Reporta las etiquetas como: ["1..*", "0..1"]
+   - NO crees dos relaciones separadas, es UNA SOLA relación bidireccional
+
+**REGLAS CRÍTICAS**:
+1. NO inventes relaciones que no existen visualmente
+2. Una línea = UNA relación (incluso si tiene etiquetas en ambos extremos)
+3. Si una línea tiene múltiples etiquetas, inclúyelas TODAS en el array "labels"
+4. Cuenta las líneas FÍSICAS en la imagen, NO las etiquetas
+5. Reporta EXACTAMENTE lo que ves
+
+⚠️ **FORMATO DE SALIDA** (JSON exacto sin explicaciones):
 
 {
   "nodes": [
     {
-      "id": "uuid",
+      "id": "uuid1",
       "name": "NombreClase",
       "attributes": [
         {"name": "atributo", "type": "tipo"}
       ],
       "methods": [
-        {"name": "metodo", "parameters": "", "returnType": ""}
+        {"name": "metodo", "parameters": "", "returnType": "tipo"}
       ]
     }
   ],
   "edges_raw": [
     {
-      "id": "edge-uuid",
+      "id": "edge-uuid1",
       "sourceName": "ClaseOrigen",
       "targetName": "ClaseDestino",
       "head": {
         "shape": "triangle|diamond|none",
-        "fill": "solid|none|unknown",
-        "size": "small|large|unknown"
+        "fill": "solid|none|white|black",
+        "size": "small|large|medium"
       },
       "tail": {
-        "diamond": "none|white|black"
+        "shape": "triangle|diamond|none",
+        "diamond": "none|white|black",
+        "fill": "solid|none|white|black"
       },
       "line": {
-        "style": "solid|dashed|unknown"
+        "style": "solid|dashed"
       },
-      "labels": ["1", "0..*"]
+      "labels": ["etiqueta_extremo1", "etiqueta_extremo2"]
     }
   ]
 }
+
+**EJEMPLO IMPORTANTE**:
+Si ves una línea entre Persona y Perro con "1..*" cerca de Persona y "0..1" cerca de Perro:
+```json
+{
+  "id": "edge-1",
+  "sourceName": "Persona",
+  "targetName": "Perro",
+  "labels": ["1..*", "0..1"]
+}
+```
+NO crees dos edges separadas. Es una sola línea física.
+
+**IMPORTANTE**: 
+- sourceName y targetName deben ser nombres exactos de clases detectadas
+- Para cada relación, identifica CLARAMENTE qué símbolo está en qué extremo
+- NO uses "unknown" a menos que sea completamente imposible determinarlo
+- Cuenta líneas físicas, no etiquetas
 
 NO escribas texto fuera del JSON.
 """
@@ -405,6 +438,7 @@ NO escribas texto fuera del JSON.
 def _edge_to_relationship_type(edge):
     """
     Determina el tipo de relación UML a partir de los rasgos visuales detectados por Gemini.
+    Retorna (tipo_relacion, posicion_del_simbolo)
     """
     head = edge.get("head", {})
     tail = edge.get("tail", {})
@@ -413,24 +447,42 @@ def _edge_to_relationship_type(edge):
     head_shape = head.get("shape")
     head_fill = head.get("fill")
     head_size = head.get("size")
+    tail_shape = tail.get("shape")
     tail_diamond = tail.get("diamond")
+    tail_fill = tail.get("fill")
     line_style = line.get("style")
 
     # 🔸 Reglas determinísticas
-    if tail_diamond == "black":
-        return "composition"
-    if tail_diamond == "white":
-        return "aggregation"
+    
+    # Verificar rombos en TAIL (composition/aggregation)
+    if tail_diamond == "black" or (tail_shape == "diamond" and tail_fill == "black"):
+        return "composition", "tail"
+    if tail_diamond == "white" or (tail_shape == "diamond" and (tail_fill in ["white", "none", None])):
+        return "aggregation", "tail"
+    
+    # Verificar rombos en HEAD (composition/aggregation)
+    if head_shape == "diamond":
+        if head_fill == "solid" or head_fill == "black":
+            return "composition", "head"
+        else:
+            return "aggregation", "head"
+    
+    # Verificar línea punteada (dependency)
     if line_style == "dashed":
-        return "dependency"
+        return "dependency", "none"
 
+    # Verificar triángulos en HEAD (generalization)
     if head_shape == "triangle":
-        if head_size == "large" or head_fill == "none":
-            return "generalization"  # triángulo grande/vacío → herencia
-        if head_size == "small" or head_fill == "solid":
-            return "association"  # triángulo pequeño/negro → asociación
+        if head_fill == "none" or head_fill == "white" or head_size == "large":
+            return "generalization", "head"
+    
+    # Verificar triángulos en TAIL (generalization)
+    if tail_shape == "triangle":
+        if tail_fill == "none" or tail_fill == "white":
+            return "generalization", "tail"
 
-    return "association"
+    # Por defecto: association
+    return "association", "none"
 
 
 def _map_edges_to_relationships(parsed_json):
@@ -455,37 +507,92 @@ def _map_edges_to_relationships(parsed_json):
     ]
 
     relationships = []
+    seen_relationships = set()  # Para evitar duplicados
+    relationship_labels = {}  # Para acumular labels de relaciones bidireccionales
 
     for e in edges:
-        rel_type = _edge_to_relationship_type(e)
+        rel_type, symbol_position = _edge_to_relationship_type(e)
         src = e.get("sourceName")
         tgt = e.get("targetName")
         labels = e.get("labels", [])
 
-        # 🔹 Corrección automática de dirección
-        # Si el rombo (black o white) está en el head, invertir
-        head = e.get("head", {})
-        tail = e.get("tail", {})
-
-        if head.get("shape") == "diamond" or head.get("fill") in ["black", "white"]:
-            src, tgt = tgt, src  # invertir dirección
-
-        # Si el triángulo grande (herencia) está en el head, dejar igual
-        # Si está en el tail (raro), invertir
-        if tail.get("shape") == "triangle" and rel_type == "generalization":
-            src, tgt = tgt, src
-
         if not src or not tgt:
             continue
+
+        # 🔹 Corrección automática de dirección según posición del símbolo
+        # 
+        # REGLAS UML:
+        # - AGGREGATION: El rombo blanco está en el lado del TODO/CONTENEDOR
+        #   Ejemplo: Si Persona◇---Comida, entonces Persona contiene Comida
+        #   Si el rombo está en tail (Comida◇---Persona), invertir para que sea Persona→Comida
+        #
+        # - COMPOSITION: El rombo negro está en el lado del TODO/CONTENEDOR
+        #   Mantener dirección tal como Gemini la detecta (NO invertir)
+        #
+        # - GENERALIZATION: El triángulo apunta a la CLASE BASE/PADRE
+        #   Ejemplo: Si Perro---▷Gato, entonces Perro hereda de Gato
+        #   Si el triángulo está en head, la dirección es correcta (Perro→Gato)
+        
+        if rel_type == "aggregation":
+            # Si el rombo blanco está en tail (origen), NO invertir (ya está correcto)
+            # Si el rombo blanco está en head (destino), SÍ invertir
+            if symbol_position == "head":
+                src, tgt = tgt, src
+        elif rel_type == "composition":
+            # Para composition NO invertir nunca, mantener dirección original
+            pass
+        elif rel_type == "generalization":
+            # Si el triángulo está en head (destino), NO invertir (apunta al padre)
+            # Si el triángulo está en tail (origen), SÍ invertir
+            if symbol_position == "tail":
+                src, tgt = tgt, src
+        # Para association y dependency no hay corrección de dirección necesaria
+        
+        src_id = name_to_id.get(src)
+        tgt_id = name_to_id.get(tgt)
+        
+        # Crear claves para detectar duplicados (considerando bidireccionalidad)
+        rel_key = f"{src_id}-{tgt_id}-{rel_type}"
+        rel_key_reverse = f"{tgt_id}-{src_id}-{rel_type}"
+        
+        # Verificar si ya existe esta relación o su inversa
+        if rel_key in seen_relationships:
+            # Ya existe, solo acumular labels si hay
+            if labels:
+                clean_labels = [label for label in labels if label is not None and label != "null" and label != ""]
+                if clean_labels and rel_key in relationship_labels:
+                    relationship_labels[rel_key].extend(clean_labels)
+            continue
+        
+        if rel_key_reverse in seen_relationships:
+            # Existe la relación inversa, acumular labels
+            if labels:
+                clean_labels = [label for label in labels if label is not None and label != "null" and label != ""]
+                if clean_labels and rel_key_reverse in relationship_labels:
+                    relationship_labels[rel_key_reverse].extend(clean_labels)
+            continue
+        
+        seen_relationships.add(rel_key)
+        
+        # Limpiar labels (eliminar nulls, vacíos y duplicados)
+        clean_labels = [label for label in labels if label is not None and label != "null" and label != ""]
+        relationship_labels[rel_key] = clean_labels
 
         relationships.append(
             {
                 "id": e.get("id") or str(uuid4()),
                 "type": rel_type,
-                "sourceId": name_to_id.get(src),
-                "targetId": name_to_id.get(tgt),
-                "labels": labels,
+                "sourceId": src_id,
+                "targetId": tgt_id,
+                "labels": clean_labels,
             }
         )
+    
+    # Actualizar labels acumuladas en las relaciones finales
+    for rel in relationships:
+        rel_key = f"{rel['sourceId']}-{rel['targetId']}-{rel['type']}"
+        if rel_key in relationship_labels:
+            # Eliminar duplicados manteniendo el orden
+            rel['labels'] = list(dict.fromkeys(relationship_labels[rel_key]))
 
     return {"classes": classes, "relationships": relationships}

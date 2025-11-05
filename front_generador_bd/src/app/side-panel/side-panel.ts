@@ -183,7 +183,7 @@ export class SidePanel {
     this.umlImageService.analyzeImage(file).subscribe({
       next: (res) => {
         const umlJson = res.uml_json || res; // depende de la respuesta del backend
-        this.diagramService.loadFromJsonWithTypeDefaults(umlJson);
+        this.diagramService.loadFromJson(umlJson);
         this.analyzingModel.set(false);
       },
       error: (err) => {
