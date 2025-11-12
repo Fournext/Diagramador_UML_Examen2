@@ -63,6 +63,117 @@ public class ProjectGenerator {
         // normalizar
         schema = JsonNormalizer.normalize(schema);
 
+        // ====== DETECTAR RELACIONES MUCHOS A MUCHOS Y CREAR ENTIDADES INTERMEDIAS ======
+        List<Map<String, Object>> intermediateEntities = new ArrayList<>();
+        Set<String> processedManyToManyRelations = new HashSet<>();
+        
+        if (schema.getRelationships() != null) {
+            for (var rel : schema.getRelationships()) {
+                if ("association".equals(rel.getType())
+                        || "aggregation".equals(rel.getType())
+                        || "composition".equals(rel.getType())
+                        || "dependency".equals(rel.getType())) {
+                    
+                    String sourceName = schema.getClasses().stream()
+                            .filter(cl -> cl.getId().equals(rel.getSourceId()))
+                            .map(UmlClass::getName)
+                            .findFirst().orElse(null);
+
+                    String targetName = schema.getClasses().stream()
+                            .filter(cl -> cl.getId().equals(rel.getTargetId()))
+                            .map(UmlClass::getName)
+                            .findFirst().orElse(null);
+
+                    if (sourceName == null || targetName == null) continue;
+
+                    String sourceCard = rel.getLabels().size() > 0 ? rel.getLabels().get(0).trim() : "";
+                    String targetCard = rel.getLabels().size() > 1 ? rel.getLabels().get(1).trim() : "";
+
+                    if (sourceCard.isEmpty() && "dependency".equals(rel.getType())) {
+                        sourceCard = "*";
+                        targetCard = "1";
+                    }
+
+                    boolean sourceIsMany = sourceCard.contains("*");
+                    boolean targetIsMany = targetCard.contains("*");
+
+                    // Si es ManyToMany, crear entidad intermedia
+                    if (sourceIsMany && targetIsMany) {
+                        String sourceEntity = NamingUtil.toJavaClass(sourceName);
+                        String targetEntity = NamingUtil.toJavaClass(targetName);
+                        
+                        // Crear clave única para evitar duplicados (ordenar alfabéticamente)
+                        String relKey = sourceEntity.compareTo(targetEntity) < 0 
+                                ? sourceEntity + "_" + targetEntity 
+                                : targetEntity + "_" + sourceEntity;
+                        
+                        if (!processedManyToManyRelations.contains(relKey)) {
+                            processedManyToManyRelations.add(relKey);
+                            
+                            // Ordenar para consistencia en nombres
+                            String firstEntity = sourceEntity.compareTo(targetEntity) < 0 ? sourceEntity : targetEntity;
+                            String secondEntity = sourceEntity.compareTo(targetEntity) < 0 ? targetEntity : sourceEntity;
+                            String firstEntityField = NamingUtil.toField(firstEntity);
+                            String secondEntityField = NamingUtil.toField(secondEntity);
+                            
+                            // Nombre de la entidad intermedia
+                            String intermediateEntityName = firstEntity + secondEntity;
+                            
+                            // Crear contexto para la entidad intermedia
+                            Map<String, Object> intermediateCtx = new HashMap<>();
+                            intermediateCtx.put("basePackage", basePackage);
+                            intermediateCtx.put("EntityName", intermediateEntityName);
+                            intermediateCtx.put("plural", intermediateEntityName.toLowerCase());
+                            
+                            // Atributo ID autogenerado
+                            List<Map<String, Object>> intermediateAttrs = new ArrayList<>();
+                            intermediateAttrs.add(Map.of(
+                                "isId", true,
+                                "type", "Long",
+                                "name", "id",
+                                "generated", true
+                            ));
+                            intermediateCtx.put("attributes", intermediateAttrs);
+                            
+                            // Dos relaciones ManyToOne con configuración para evitar loops
+                            List<Map<String, Object>> intermediateManyToOne = new ArrayList<>();
+                            intermediateManyToOne.add(Map.of(
+                                "TargetEntity", firstEntity,
+                                "targetField", firstEntityField,
+                                "ignoreBackReference", NamingUtil.toField(intermediateEntityName)
+                            ));
+                            intermediateManyToOne.add(Map.of(
+                                "TargetEntity", secondEntity,
+                                "targetField", secondEntityField,
+                                "ignoreBackReference", NamingUtil.toField(intermediateEntityName)
+                            ));
+                            intermediateCtx.put("manyToOne", intermediateManyToOne);
+                            intermediateCtx.put("hasManyToOne", true);
+                            
+                            // Sin otras relaciones
+                            intermediateCtx.put("oneToMany", new ArrayList<>());
+                            intermediateCtx.put("oneToOne", new ArrayList<>());
+                            intermediateCtx.put("manyToMany", new ArrayList<>());
+                            intermediateCtx.put("methods", new ArrayList<>());
+                            intermediateCtx.put("isParent", false);
+                            intermediateCtx.put("needsOnDeleteImport", false);
+                            intermediateCtx.put("hasOneToOne", false);
+                            
+                            // PK info
+                            intermediateCtx.put("pkName", "id");
+                            intermediateCtx.put("pkType", "Long");
+                            intermediateCtx.put("pkSetter", "setId");
+                            intermediateCtx.put("pkGetter", "getId");
+                            intermediateCtx.put("pkGenerated", true);
+                            intermediateCtx.put("hasPk", true);
+                            
+                            intermediateEntities.add(intermediateCtx);
+                        }
+                    }
+                }
+            }
+        }
+
         for (UmlClass c : schema.getClasses()) {
             String entityName = NamingUtil.toJavaClass(c.getName());
 
@@ -223,13 +334,16 @@ public class ProjectGenerator {
                                     needsOnDeleteImport = true;
                                 }
                             } else if (sourceIsMany && targetIsMany) {
-                                // *..* => ManyToMany
-                                manyToMany.add(Map.of(
-                                        "TargetEntity", targetEntity,
-                                        "collectionField", NamingUtil.toField(targetEntity),
-                                        "joinTable", sourceEntity.toLowerCase() + "_" + targetEntity.toLowerCase(),
-                                        "thisTable", sourceEntity.toLowerCase(),
-                                        "otherTable", targetEntity.toLowerCase()
+                                // *..* => Crear OneToMany hacia entidad intermedia
+                                String firstEntity = sourceEntity.compareTo(targetEntity) < 0 ? sourceEntity : targetEntity;
+                                String secondEntity = sourceEntity.compareTo(targetEntity) < 0 ? targetEntity : sourceEntity;
+                                String intermediateEntityName = firstEntity + secondEntity;
+                                String mappedByField = NamingUtil.toField(sourceEntity);
+                                
+                                oneToMany.add(Map.of(
+                                        "TargetEntity", intermediateEntityName,
+                                        "collectionField", NamingUtil.toField(intermediateEntityName),
+                                        "mappedBy", mappedByField
                                 ));
                             } else if (!sourceIsMany && targetIsMany) {
                                 // source 1..* target => Source tiene OneToMany
@@ -256,8 +370,20 @@ public class ProjectGenerator {
                                         "TargetEntity", sourceEntity,
                                         "targetField", NamingUtil.toField(sourceEntity)
                                 ));
+                            } else if (targetIsMany && sourceIsMany) {
+                                // source *..* target => Target también tiene OneToMany hacia entidad intermedia
+                                String firstEntity = sourceEntity.compareTo(targetEntity) < 0 ? sourceEntity : targetEntity;
+                                String secondEntity = sourceEntity.compareTo(targetEntity) < 0 ? targetEntity : sourceEntity;
+                                String intermediateEntityName = firstEntity + secondEntity;
+                                String mappedByField = NamingUtil.toField(targetEntity);
+                                
+                                oneToMany.add(Map.of(
+                                        "TargetEntity", intermediateEntityName,
+                                        "collectionField", NamingUtil.toField(intermediateEntityName),
+                                        "mappedBy", mappedByField
+                                ));
                             }
-                            // 1..1 y *..* no se duplican si ya lo generaste en source
+                            // 1..1 no se duplica si ya lo generaste en source
                         }
                     }
                 }
@@ -322,6 +448,8 @@ public class ProjectGenerator {
             entityCtx.put("isParent", isParent);
             entityCtx.put("plural", entityName.toLowerCase());
             entityCtx.put("needsOnDeleteImport", needsOnDeleteImport);
+            entityCtx.put("hasManyToOne", !manyToOne.isEmpty());
+            entityCtx.put("hasOneToOne", !oneToOne.isEmpty());
 
             // PK para Controller/Service
             if (isChild) {
@@ -371,6 +499,15 @@ public class ProjectGenerator {
             render("Repository.mustache", entityCtx, repoDir.resolve(entityName + "Repository.java"));
             render("Service.mustache", entityCtx, svcDir.resolve(entityName + "Service.java"));
             render("Controller.mustache", entityCtx, ctrlDir.resolve(entityName + "Controller.java"));
+        }
+
+        // ====== GENERAR ENTIDADES INTERMEDIAS ======
+        for (Map<String, Object> intermediateCtx : intermediateEntities) {
+            String intermediateEntityName = (String) intermediateCtx.get("EntityName");
+            render("Entity.mustache", intermediateCtx, modelDir.resolve(intermediateEntityName + ".java"));
+            render("Repository.mustache", intermediateCtx, repoDir.resolve(intermediateEntityName + "Repository.java"));
+            render("Service.mustache", intermediateCtx, svcDir.resolve(intermediateEntityName + "Service.java"));
+            render("Controller.mustache", intermediateCtx, ctrlDir.resolve(intermediateEntityName + "Controller.java"));
         }
 
         // ====== GENERAR COLECCIÓN DE POSTMAN ======

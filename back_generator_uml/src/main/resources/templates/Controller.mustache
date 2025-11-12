@@ -27,8 +27,10 @@ public class {{EntityName}}Controller {
     }
 
     @PostMapping
-    public {{EntityName}} create(@RequestBody {{EntityName}} body) {
-    return service.save(body);
+    public {{EntityName}} create(@RequestBody Map<String, Object> body) {
+        {{EntityName}} entity = new {{EntityName}}();
+        updateEntityFromMap(entity, body);
+        return service.save(entity);
     }
 
     @PutMapping("/{id}")
@@ -37,11 +39,32 @@ public class {{EntityName}}Controller {
         {{EntityName}} existing = service.findById(id)
             .orElseThrow(() -> new RuntimeException("{{EntityName}} not found with id " + id));
         
-        // Actualizar solo los campos que vienen en el body
-        updates.forEach((key, value) -> {
+        updateEntityFromMap(existing, updates);
+        return service.save(existing);
+    }
+    
+    private void updateEntityFromMap({{EntityName}} entity, Map<String, Object> data) {
+        data.forEach((key, value) -> {
             try {
+{{#manyToOne}}
+                // Manejar relación ManyToOne: {{targetField}}
+                if (key.equals("{{targetField}}id") && value != null) {
+                    Long relId = convertToLong(value);
+                    service.find{{TargetEntity}}ById(relId).ifPresent(entity::set{{TargetEntity}});
+                    return;
+                }
+{{/manyToOne}}
+{{#oneToOne}}
+                // Manejar relación OneToOne: {{targetField}}
+                if (key.equals("{{targetField}}id") && value != null) {
+                    Long relId = convertToLong(value);
+                    service.find{{TargetEntity}}ById(relId).ifPresent(entity::set{{TargetEntity}});
+                    return;
+                }
+{{/oneToOne}}
+                
                 String setterName = "set" + Character.toUpperCase(key.charAt(0)) + key.substring(1);
-                java.lang.reflect.Method setter = Arrays.stream(existing.getClass().getMethods())
+                java.lang.reflect.Method setter = Arrays.stream(entity.getClass().getMethods())
                     .filter(m -> m.getName().equals(setterName) && m.getParameterCount() == 1)
                     .findFirst()
                     .orElse(null);
@@ -49,14 +72,19 @@ public class {{EntityName}}Controller {
                 if (setter != null && value != null) {
                     Class<?> paramType = setter.getParameterTypes()[0];
                     Object convertedValue = convertValue(value, paramType);
-                    setter.invoke(existing, convertedValue);
+                    setter.invoke(entity, convertedValue);
                 }
             } catch (Exception e) {
                 // Ignorar campos que no se puedan actualizar
             }
         });
-        
-        return service.save(existing);
+    }
+    
+    private Long convertToLong(Object value) {
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        return Long.parseLong(value.toString());
     }
     
     private Object convertValue(Object value, Class<?> targetType) {

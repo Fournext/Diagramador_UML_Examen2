@@ -33,6 +33,54 @@ public class PostmanCollectionGenerator {
 
         ArrayNode items = collection.putArray("item");
 
+        // ====== DETECTAR ENTIDADES INTERMEDIAS PARA MANYTOMANY ======
+        java.util.Set<String> intermediateEntities = new java.util.HashSet<>();
+        if (schema.getRelationships() != null) {
+            for (var rel : schema.getRelationships()) {
+                if ("association".equals(rel.getType())
+                        || "aggregation".equals(rel.getType())
+                        || "composition".equals(rel.getType())
+                        || "dependency".equals(rel.getType())) {
+                    
+                    String sourceName = schema.getClasses().stream()
+                            .filter(cl -> cl.getId().equals(rel.getSourceId()))
+                            .map(UmlClass::getName)
+                            .findFirst().orElse(null);
+
+                    String targetName = schema.getClasses().stream()
+                            .filter(cl -> cl.getId().equals(rel.getTargetId()))
+                            .map(UmlClass::getName)
+                            .findFirst().orElse(null);
+
+                    if (sourceName == null || targetName == null) continue;
+
+                    String sourceCard = rel.getLabels().size() > 0 ? rel.getLabels().get(0).trim() : "";
+                    String targetCard = rel.getLabels().size() > 1 ? rel.getLabels().get(1).trim() : "";
+
+                    if (sourceCard.isEmpty() && "dependency".equals(rel.getType())) {
+                        sourceCard = "*";
+                        targetCard = "1";
+                    }
+
+                    boolean sourceIsMany = sourceCard.contains("*");
+                    boolean targetIsMany = targetCard.contains("*");
+
+                    // Si es ManyToMany, registrar la entidad intermedia
+                    if (sourceIsMany && targetIsMany) {
+                        String sourceEntity = NamingUtil.toJavaClass(sourceName);
+                        String targetEntity = NamingUtil.toJavaClass(targetName);
+                        
+                        // Ordenar alfabéticamente para consistencia
+                        String firstEntity = sourceEntity.compareTo(targetEntity) < 0 ? sourceEntity : targetEntity;
+                        String secondEntity = sourceEntity.compareTo(targetEntity) < 0 ? targetEntity : sourceEntity;
+                        
+                        String intermediateEntityName = firstEntity + secondEntity;
+                        intermediateEntities.add(intermediateEntityName);
+                    }
+                }
+            }
+        }
+
         for (UmlClass c : schema.getClasses()) {
             String entityName = NamingUtil.toJavaClass(c.getName());
             String pluralName = entityName.toLowerCase();
@@ -90,6 +138,35 @@ public class PostmanCollectionGenerator {
 
             // DELETE
             folderItems.add(createDeleteRequest(entityName, pluralName, pkType));
+
+            items.add(folder);
+        }
+
+        // ====== GENERAR CARPETAS PARA ENTIDADES INTERMEDIAS (MANYTOMANY) ======
+        for (String intermediateEntityName : intermediateEntities) {
+            String pluralName = intermediateEntityName.toLowerCase();
+            
+            ObjectNode folder = objectMapper.createObjectNode();
+            folder.put("name", intermediateEntityName + " (Relación)");
+            ArrayNode folderItems = folder.putArray("item");
+
+            // Las entidades intermedias siempre tienen Long id autogenerado
+            String pkType = "Long";
+
+            // GET All
+            folderItems.add(createGetAllRequest(intermediateEntityName, pluralName));
+
+            // GET One
+            folderItems.add(createGetOneRequest(intermediateEntityName, pluralName, pkType));
+
+            // POST Create (sin clase UmlClass, generamos body manualmente)
+            folderItems.add(createIntermediateEntityPostRequest(intermediateEntityName, pluralName, schema));
+
+            // PUT Update
+            folderItems.add(createIntermediateEntityPutRequest(intermediateEntityName, pluralName, schema, pkType));
+
+            // DELETE
+            folderItems.add(createDeleteRequest(intermediateEntityName, pluralName, pkType));
 
             items.add(folder);
         }
@@ -209,6 +286,57 @@ public class PostmanCollectionGenerator {
         return request;
     }
 
+    private ObjectNode createIntermediateEntityPostRequest(String intermediateEntityName, String pluralName, UmlSchema schema) {
+        ObjectNode request = objectMapper.createObjectNode();
+        request.put("name", "Create " + intermediateEntityName);
+
+        ObjectNode requestDetails = request.putObject("request");
+        requestDetails.put("method", "POST");
+
+        ArrayNode headers = requestDetails.putArray("header");
+        headers.add(header("Content-Type", "application/json"));
+        headers.add(header("Accept", "application/json"));
+
+        ObjectNode body = requestDetails.putObject("body");
+        body.put("mode", "raw");
+        body.put("raw", generateIntermediateEntityBody(intermediateEntityName, schema, false));
+
+        ObjectNode url = requestDetails.putObject("url");
+        url.put("raw", "{{baseUrl}}/api/" + pluralName);
+        ArrayNode host = url.putArray("host");
+        host.add("{{baseUrl}}");
+        ArrayNode path = url.putArray("path");
+        path.add("api").add(pluralName);
+
+        return request;
+    }
+
+    private ObjectNode createIntermediateEntityPutRequest(String intermediateEntityName, String pluralName, UmlSchema schema, String pkType) {
+        ObjectNode request = objectMapper.createObjectNode();
+        request.put("name", "Update " + intermediateEntityName);
+
+        ObjectNode requestDetails = request.putObject("request");
+        requestDetails.put("method", "PUT");
+
+        ArrayNode headers = requestDetails.putArray("header");
+        headers.add(header("Content-Type", "application/json"));
+        headers.add(header("Accept", "application/json"));
+
+        ObjectNode body = requestDetails.putObject("body");
+        body.put("mode", "raw");
+        body.put("raw", generateIntermediateEntityBody(intermediateEntityName, schema, false));
+
+        String exampleId = pkType.equals("String") ? "example-id" : "1";
+        ObjectNode url = requestDetails.putObject("url");
+        url.put("raw", "{{baseUrl}}/api/" + pluralName + "/" + exampleId);
+        ArrayNode host = url.putArray("host");
+        host.add("{{baseUrl}}");
+        ArrayNode path = url.putArray("path");
+        path.add("api").add(pluralName).add(exampleId);
+
+        return request;
+    }
+
     private ObjectNode header(String key, String value) {
         ObjectNode h = objectMapper.createObjectNode();
         h.put("key", key);
@@ -278,7 +406,7 @@ public class PostmanCollectionGenerator {
             body.set(fieldName, generateSampleValue(type, fieldName));
         }
 
-        // Relaciones ManyToOne o OneToOne: incluir objeto con ID
+        // Relaciones ManyToOne o OneToOne: incluir solo el ID de la relación
         if (schema.getRelationships() != null) {
             for (var rel : schema.getRelationships()) {
                 String sourceName = schema.getClasses().stream()
@@ -311,10 +439,10 @@ public class PostmanCollectionGenerator {
                                 "dependency".equals(rel.getType()))) {
 
                     // Si source tiene cardinalidad * hacia target
-                    // entonces Source tiene ManyToOne → incluir FK
+                    // entonces Source tiene ManyToOne → incluir solo el ID de la relación
                     if (sourceIsMany && !targetIsMany) {
                         String targetEntity = NamingUtil.toJavaClass(targetName);
-                        String fieldName = NamingUtil.toField(targetEntity);
+                        String fieldName = NamingUtil.toField(targetEntity) + "id";
 
                         UmlClass targetClass = schema.getClasses().stream()
                                 .filter(tc -> tc.getName().equals(targetName))
@@ -322,16 +450,13 @@ public class PostmanCollectionGenerator {
 
                         if (targetClass != null && !targetClass.getAttributes().isEmpty()) {
                             String targetPkType = TypeMapper.toJava(targetClass.getAttributes().get(0).getType());
-                            ObjectNode relObj = objectMapper.createObjectNode();
-                            String pkFieldName = NamingUtil.toField(targetClass.getAttributes().get(0).getName());
-                            relObj.set(pkFieldName, generateSampleValue(targetPkType, pkFieldName));
-                            body.set(fieldName, relObj);
+                            body.set(fieldName, generateSampleValue(targetPkType, fieldName));
                         }
                     }
                     // Si source tiene cardinalidad 1 y target tiene 1 (OneToOne o Composition)
                     else if (!sourceIsMany && !targetIsMany) {
                         String targetEntity = NamingUtil.toJavaClass(targetName);
-                        String fieldName = NamingUtil.toField(targetEntity);
+                        String fieldName = NamingUtil.toField(targetEntity) + "id";
 
                         UmlClass targetClass = schema.getClasses().stream()
                                 .filter(tc -> tc.getName().equals(targetName))
@@ -339,14 +464,12 @@ public class PostmanCollectionGenerator {
 
                         if (targetClass != null && !targetClass.getAttributes().isEmpty()) {
                             String targetPkType = TypeMapper.toJava(targetClass.getAttributes().get(0).getType());
-                            ObjectNode relObj = objectMapper.createObjectNode();
-                            String pkFieldName = NamingUtil.toField(targetClass.getAttributes().get(0).getName());
-                            relObj.set(pkFieldName, generateSampleValue(targetPkType, pkFieldName));
-                            body.set(fieldName, relObj);
+                            body.set(fieldName, generateSampleValue(targetPkType, fieldName));
                         }
                     }
+                    // Si source=many y target=many → ManyToMany
+                    // NO incluir en el body, se gestiona con endpoints dedicados
                     // Si source=1 y target=many → Source tiene OneToMany, no incluir FK
-                    // Si source=many y target=many → ManyToMany, no incluir FK en body simple
                 }
                 
                 // Lado TARGET: si target tiene cardinalidad many y source tiene 1
@@ -360,7 +483,7 @@ public class PostmanCollectionGenerator {
                     if (targetIsMany && !sourceIsMany) {
                         // Target (este objeto) tiene ManyToOne hacia Source
                         String sourceEntity = NamingUtil.toJavaClass(sourceName);
-                        String fieldName = NamingUtil.toField(sourceEntity);
+                        String fieldName = NamingUtil.toField(sourceEntity) + "id";
 
                         UmlClass sourceClass = schema.getClasses().stream()
                                 .filter(sc -> sc.getName().equals(sourceName))
@@ -368,14 +491,107 @@ public class PostmanCollectionGenerator {
 
                         if (sourceClass != null && !sourceClass.getAttributes().isEmpty()) {
                             String sourcePkType = TypeMapper.toJava(sourceClass.getAttributes().get(0).getType());
-                            ObjectNode relObj = objectMapper.createObjectNode();
-                            String pkFieldName = NamingUtil.toField(sourceClass.getAttributes().get(0).getName());
-                            relObj.set(pkFieldName, generateSampleValue(sourcePkType, pkFieldName));
-                            body.set(fieldName, relObj);
+                            body.set(fieldName, generateSampleValue(sourcePkType, fieldName));
+                        }
+                    }
+                    // Si target=many y source=many → ManyToMany
+                    // NO incluir en el body, se gestiona con endpoints dedicados
+                }
+            }
+        }
+
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(body);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    private String generateIntermediateEntityBody(String intermediateEntityName, UmlSchema schema, boolean includeId) {
+        ObjectNode body = objectMapper.createObjectNode();
+
+        // Las entidades intermedias tienen estructura: FirstEntitySecondEntity
+        // Necesitamos extraer las dos entidades originales
+        // Buscamos en el schema las relaciones ManyToMany que generan esta entidad intermedia
+        
+        final String[] entityNames = {null, null}; // [0] = first, [1] = second
+        
+        if (schema.getRelationships() != null) {
+            for (var rel : schema.getRelationships()) {
+                if ("association".equals(rel.getType())
+                        || "aggregation".equals(rel.getType())
+                        || "composition".equals(rel.getType())
+                        || "dependency".equals(rel.getType())) {
+                    
+                    String sourceName = schema.getClasses().stream()
+                            .filter(cl -> cl.getId().equals(rel.getSourceId()))
+                            .map(UmlClass::getName)
+                            .findFirst().orElse(null);
+
+                    String targetName = schema.getClasses().stream()
+                            .filter(cl -> cl.getId().equals(rel.getTargetId()))
+                            .map(UmlClass::getName)
+                            .findFirst().orElse(null);
+
+                    if (sourceName == null || targetName == null) continue;
+
+                    String sourceCard = rel.getLabels().size() > 0 ? rel.getLabels().get(0).trim() : "";
+                    String targetCard = rel.getLabels().size() > 1 ? rel.getLabels().get(1).trim() : "";
+
+                    if (sourceCard.isEmpty() && "dependency".equals(rel.getType())) {
+                        sourceCard = "*";
+                        targetCard = "1";
+                    }
+
+                    boolean sourceIsMany = sourceCard.contains("*");
+                    boolean targetIsMany = targetCard.contains("*");
+
+                    if (sourceIsMany && targetIsMany) {
+                        String sourceEntity = NamingUtil.toJavaClass(sourceName);
+                        String targetEntity = NamingUtil.toJavaClass(targetName);
+                        
+                        String firstEntity = sourceEntity.compareTo(targetEntity) < 0 ? sourceEntity : targetEntity;
+                        String secondEntity = sourceEntity.compareTo(targetEntity) < 0 ? targetEntity : sourceEntity;
+                        
+                        String candidateName = firstEntity + secondEntity;
+                        
+                        if (candidateName.equals(intermediateEntityName)) {
+                            entityNames[0] = firstEntity;
+                            entityNames[1] = secondEntity;
+                            break;
                         }
                     }
                 }
             }
+        }
+
+        // Generar los campos de FK para las dos entidades
+        if (entityNames[0] != null && entityNames[1] != null) {
+            String firstFieldName = NamingUtil.toField(entityNames[0]) + "id";
+            String secondFieldName = NamingUtil.toField(entityNames[1]) + "id";
+            
+            // Obtener el tipo de PK de cada entidad
+            UmlClass firstClass = schema.getClasses().stream()
+                    .filter(c -> NamingUtil.toJavaClass(c.getName()).equals(entityNames[0]))
+                    .findFirst().orElse(null);
+            
+            UmlClass secondClass = schema.getClasses().stream()
+                    .filter(c -> NamingUtil.toJavaClass(c.getName()).equals(entityNames[1]))
+                    .findFirst().orElse(null);
+            
+            String firstPkType = "Long";
+            String secondPkType = "Long";
+            
+            if (firstClass != null && !firstClass.getAttributes().isEmpty()) {
+                firstPkType = TypeMapper.toJava(firstClass.getAttributes().get(0).getType());
+            }
+            
+            if (secondClass != null && !secondClass.getAttributes().isEmpty()) {
+                secondPkType = TypeMapper.toJava(secondClass.getAttributes().get(0).getType());
+            }
+            
+            body.set(firstFieldName, generateSampleValue(firstPkType, firstFieldName));
+            body.set(secondFieldName, generateSampleValue(secondPkType, secondFieldName));
         }
 
         try {

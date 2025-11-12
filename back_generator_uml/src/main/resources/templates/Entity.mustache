@@ -42,7 +42,12 @@ public class {{EntityName}}{{#parentClass}} extends {{parentClass}}{{/parentClas
 {{#manyToOne}}
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "{{targetField}}_id")
+    {{#ignoreBackReference}}
+    @JsonIgnoreProperties(value = {"{{ignoreBackReference}}", "hibernateLazyInitializer", "handler"}, allowSetters = true)
+    {{/ignoreBackReference}}
+    {{^ignoreBackReference}}
     @JsonIgnoreProperties(value = {"hibernateLazyInitializer", "handler"}, allowSetters = true)
+    {{/ignoreBackReference}}
     private {{TargetEntity}} {{targetField}};
 {{/manyToOne}}
 
@@ -60,16 +65,6 @@ public class {{EntityName}}{{#parentClass}} extends {{parentClass}}{{/parentClas
     @JoinColumn(name = "{{targetField}}_id")
     private {{TargetEntity}} {{targetField}};
 {{/oneToOne}}
-
-{{#manyToMany}}
-    @ManyToMany
-    @JoinTable(
-    name = "{{joinTable}}",
-    joinColumns = @JoinColumn(name = "{{thisTable}}_id"),
-    inverseJoinColumns = @JoinColumn(name = "{{otherTable}}_id")
-    )
-    private Set<{{TargetEntity}}> {{collectionField}} = new HashSet<>();
-{{/manyToMany}}
 
 {{#methods}}
     public {{returnType}} {{name}}({{parameters}}) {
