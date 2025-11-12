@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.*;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
+@JsonIdentityInfo(generator = ObjectIdGenerators.PropertyGenerator.class, property = "id")
 {{#isParent}}
     @Inheritance(strategy = InheritanceType.JOINED)
 {{/isParent}}
@@ -53,7 +54,7 @@ public class {{EntityName}}{{#parentClass}} extends {{parentClass}}{{/parentClas
 
 {{#oneToMany}}
     @OneToMany(mappedBy = "{{mappedBy}}", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
-    @JsonIgnoreProperties(value = {"{{mappedBy}}"}, allowSetters = true)
+    @JsonIgnoreProperties(value = {"{{mappedBy}}", "hibernateLazyInitializer", "handler"}, allowSetters = true)
     private List<{{TargetEntity}}> {{collectionField}} = new ArrayList<>();
 {{/oneToMany}}
 

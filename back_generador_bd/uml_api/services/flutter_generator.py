@@ -11,7 +11,7 @@ class FlutterCRUDGenerator:
         self.parsed_relationships = self._parse_relationships()
 
     def _parse_relationships(self):
-      """Convierte relaciones UML en vínculos lógicos entre clases"""
+      """Convierte relaciones UML en vínculos lógicos entre clases - MISMA LÓGICA QUE ProjectGenerator.java"""
       relations_map = {cls['id']: cls['name'] for cls in self.classes}
       parsed = []
       
@@ -29,22 +29,39 @@ class FlutterCRUDGenerator:
 
           if rtype == "generalization":
               parsed.append({"from": src, "to": tgt, "kind": "inherits"})
-          elif rtype == "association":
-              # Detectar si es ManyToMany (*..* o similar)
-              source_card = labels[0].strip() if len(labels) > 0 else ""
-              target_card = labels[1].strip() if len(labels) > 1 else ""
+          elif rtype in ["association", "aggregation", "composition", "dependency"]:
+              # 1) Normalizar etiquetas (vacías -> valores por defecto)
+              raw_source = labels[0].strip() if len(labels) > 0 and labels[0] else ""
+              raw_target = labels[1].strip() if len(labels) > 1 and labels[1] else ""
               
+              # Por defecto: source tiene multiplicidad *, target tiene multiplicidad 1
+              source_card = raw_source if raw_source else "*"
+              target_card = raw_target if raw_target else "1"
+              
+              # 2) Regla por defecto para dependency SIN multiplicidades
+              if rtype == "dependency":
+                  no_multis = (not raw_source and not raw_target)
+                  if no_multis:
+                      # Por defecto: muchos dependientes (*) apuntan a un principal (1)
+                      source_card = "*"
+                      target_card = "1"
+              
+              # 3) Detectar "many"
               source_is_many = "*" in source_card
               target_is_many = "*" in target_card
               
+              # Prevenir que dependency sea tratado como 1..1
+              if rtype == "dependency" and not source_is_many and not target_is_many:
+                  source_is_many = True
+                  target_is_many = False
+              
+              # 4) Aplicar lógica según multiplicidades (igual que ProjectGenerator.java)
               if source_is_many and target_is_many:
-                  # Es ManyToMany - se generará entidad intermedia en el backend
-                  # Ordenar alfabéticamente para consistencia
+                  # *..* => ManyToMany - se generará entidad intermedia
                   first_entity = src if src < tgt else tgt
                   second_entity = tgt if src < tgt else src
                   intermediate_name = first_entity + second_entity
                   
-                  # Registrar que existe esta entidad intermedia
                   many_to_many_relations.append({
                       "from": src,
                       "to": tgt,
@@ -56,23 +73,24 @@ class FlutterCRUDGenerator:
                   # Agregar relaciones OneToMany desde ambas entidades originales hacia la intermedia
                   parsed.append({"from": src, "to": intermediate_name, "kind": "one_to_many"})
                   parsed.append({"from": tgt, "to": intermediate_name, "kind": "one_to_many"})
-              elif "1..*" in labels or "0..*" in labels:
-                  # INVERTIR: La FK debe ir en el lado "muchos" (tgt), no en el lado "uno" (src)
-                  # Entonces Perro (tgt) tiene personaId, y Persona (src) puede tener List<Perro> para navegación
-                  # Relación principal: Perro -> Persona (many_to_one con FK)
-                  parsed.append({"from": tgt, "to": src, "kind": "many_to_one"})
-                  # Relación inversa opcional: Persona -> Perro (one_to_many sin FK, solo para navegación)
-                  parsed.append({"from": src, "to": tgt, "kind": "one_to_many"})
-              else:
+              elif source_is_many and not target_is_many:
+                  # source *..1 target => Source tiene ManyToOne hacia Target
                   parsed.append({"from": src, "to": tgt, "kind": "many_to_one"})
-          elif rtype == "composition":
-              parsed.append({"from": src, "to": tgt, "kind": "one_to_one"})
-          elif rtype == "aggregation":
-              # Similar a association con 1..*, invertir la dirección de la FK
-              parsed.append({"from": tgt, "to": src, "kind": "many_to_one"})
-              parsed.append({"from": src, "to": tgt, "kind": "one_to_many"})
-          elif rtype == "dependency":
-              parsed.append({"from": src, "to": tgt, "kind": "many_to_one"})
+              elif not source_is_many and not target_is_many:
+                  # 1..1 => OneToOne
+                  is_composition = rtype == "composition"
+                  parsed.append({"from": src, "to": tgt, "kind": "one_to_one", "composition": is_composition})
+              elif not source_is_many and target_is_many:
+                  # source 1..* target => Source tiene OneToMany hacia Target
+                  parsed.append({"from": src, "to": tgt, "kind": "one_to_many"})
+              
+              # === Lado INVERSO (Target) ===
+              if not target_is_many and source_is_many:
+                  # source *..1 target => Target tiene OneToMany hacia Source (relación inversa)
+                  parsed.append({"from": tgt, "to": src, "kind": "one_to_many"})
+              elif target_is_many and not source_is_many:
+                  # source 1..* target => Target tiene ManyToOne hacia Source (relación inversa)
+                  parsed.append({"from": tgt, "to": src, "kind": "many_to_one"})
 
       return parsed
         
@@ -665,21 +683,22 @@ class HomePage extends StatelessWidget {{
                   field_name = f"{rel_name}Id"
                   fk_json_key = self._to_backend_json_key(field_name)
                   from_json_fields.append(f"{field_name}: json['{fk_json_key}']?.toString() ?? ''")
-                  # Parsear también el objeto completo si viene anidado en el JSON
+                  # Parsear también el objeto completo si viene anidado en el JSON (validar que sea Map)
                   json_key = self._to_backend_json_key(rel_name)
-                  from_json_fields.append(f"{rel_name}: json['{json_key}'] != null ? {rel['to']}.fromJson(json['{json_key}'] as Map<String, dynamic>) : null")
+                  from_json_fields.append(f"{rel_name}: json['{json_key}'] is Map<String, dynamic> ? {rel['to']}.fromJson(json['{json_key}']) : null")
               elif rel["kind"] == "one_to_one":
                   # Parsear el ID de la relación OneToOne
                   field_name = f"{rel_name}Id"
                   fk_json_key = self._to_backend_json_key(field_name)
                   from_json_fields.append(f"{field_name}: json['{fk_json_key}']?.toString() ?? ''")
-                  # Parsear también el objeto completo si viene anidado en el JSON
+                  # Parsear también el objeto completo si viene anidado en el JSON (validar que sea Map)
                   json_key = self._to_backend_json_key(rel_name)
-                  from_json_fields.append(f"{rel_name}: json['{json_key}'] != null ? {rel['to']}.fromJson(json['{json_key}'] as Map<String, dynamic>) : null")
+                  from_json_fields.append(f"{rel_name}: json['{json_key}'] is Map<String, dynamic> ? {rel['to']}.fromJson(json['{json_key}']) : null")
               elif rel["kind"] == "one_to_many":
                   # OneToMany: Parsear lista de objetos anidados que vienen en GET
+                  # Usar whereType para filtrar solo mapas válidos, ignorando nulls o listas vacías malformadas
                   json_key = self._to_backend_json_key(rel_name)
-                  from_json_fields.append(f"{rel_name}: (json['{json_key}'] as List<dynamic>?)?.map((e) => {rel['to']}.fromJson(e as Map<String, dynamic>)).toList() ?? []")
+                  from_json_fields.append(f"{rel_name}: json['{json_key}'] is List ? (json['{json_key}'] as List).whereType<Map<String, dynamic>>().map((e) => {rel['to']}.fromJson(e)).toList() : []")
 
       # toJson - incluir campos heredados también
       to_json_fields = []
