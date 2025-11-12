@@ -680,25 +680,48 @@ class HomePage extends StatelessWidget {{
               rel_name = self._to_snake_case(rel['to'])
               if rel["kind"] == "many_to_one":
                   # Parsear el ID de la relación ManyToOne
+                  # Puede venir como campo separado 'personaid' o dentro del objeto 'persona.id'
                   field_name = f"{rel_name}Id"
                   fk_json_key = self._to_backend_json_key(field_name)
-                  from_json_fields.append(f"{field_name}: json['{fk_json_key}']?.toString() ?? ''")
-                  # Parsear también el objeto completo si viene anidado en el JSON (validar que sea Map)
                   json_key = self._to_backend_json_key(rel_name)
+                  
+                  # Intentar obtener el ID de múltiples fuentes: campo directo, objeto.id, o conversión de int
+                  id_parsing = f"{field_name}: json['{fk_json_key}'] != null ? json['{fk_json_key}'].toString() : (json['{json_key}'] is Map ? json['{json_key}']['id']?.toString() : json['{json_key}']?.toString()) ?? ''"
+                  from_json_fields.append(id_parsing)
+                  
+                  # Parsear también el objeto completo si viene anidado en el JSON (validar que sea Map)
                   from_json_fields.append(f"{rel_name}: json['{json_key}'] is Map<String, dynamic> ? {rel['to']}.fromJson(json['{json_key}']) : null")
               elif rel["kind"] == "one_to_one":
                   # Parsear el ID de la relación OneToOne
+                  # Puede venir como campo separado o dentro del objeto
                   field_name = f"{rel_name}Id"
                   fk_json_key = self._to_backend_json_key(field_name)
-                  from_json_fields.append(f"{field_name}: json['{fk_json_key}']?.toString() ?? ''")
-                  # Parsear también el objeto completo si viene anidado en el JSON (validar que sea Map)
                   json_key = self._to_backend_json_key(rel_name)
+                  
+                  # Intentar obtener el ID de múltiples fuentes
+                  id_parsing = f"{field_name}: json['{fk_json_key}'] != null ? json['{fk_json_key}'].toString() : (json['{json_key}'] is Map ? json['{json_key}']['id']?.toString() : json['{json_key}']?.toString()) ?? ''"
+                  from_json_fields.append(id_parsing)
+                  
+                  # Parsear también el objeto completo si viene anidado en el JSON (validar que sea Map)
                   from_json_fields.append(f"{rel_name}: json['{json_key}'] is Map<String, dynamic> ? {rel['to']}.fromJson(json['{json_key}']) : null")
               elif rel["kind"] == "one_to_many":
                   # OneToMany: Parsear lista de objetos anidados que vienen en GET
-                  # Usar whereType para filtrar solo mapas válidos, ignorando nulls o listas vacías malformadas
+                  # El backend puede devolver listas mixtas [objeto, id, objeto] debido a @JsonIdentityInfo
+                  # Necesitamos manejar ambos casos: objetos completos (Map) y solo IDs (int)
                   json_key = self._to_backend_json_key(rel_name)
-                  from_json_fields.append(f"{rel_name}: json['{json_key}'] is List ? (json['{json_key}'] as List).whereType<Map<String, dynamic>>().map((e) => {rel['to']}.fromJson(e)).toList() : []")
+                  parse_logic = f"""json['{json_key}'] is List 
+          ? (json['{json_key}'] as List).map((e) {{
+              if (e is Map<String, dynamic>) {{
+                return {rel['to']}.fromJson(e);
+              }} else if (e is int) {{
+                // Backend devolvió solo el ID (por @JsonIdentityInfo)
+                // Crear objeto parcial solo con el ID
+                return {rel['to']}.fromJson({{'id': e}});
+              }}
+              return null;
+            }}).whereType<{rel['to']}>().toList()
+          : []"""
+                  from_json_fields.append(f"{rel_name}: {parse_logic}")
 
       # toJson - incluir campos heredados también
       to_json_fields = []
@@ -906,7 +929,16 @@ class {name}Service {{
 
       if (response.statusCode == 200) {{
         final List<dynamic> jsonList = json.decode(response.body);
-        return jsonList.map((json) => {name}.fromJson(json)).toList();
+        // El backend puede devolver listas mixtas [objeto, id] debido a @JsonIdentityInfo
+        return jsonList.map((item) {{
+          if (item is Map<String, dynamic>) {{
+            return {name}.fromJson(item);
+          }} else if (item is int) {{
+            // Backend devolvió solo el ID - crear objeto parcial
+            return {name}.fromJson({{'id': item}});
+          }}
+          return null;
+        }}).whereType<{name}>().toList();
       }} else {{
         throw Exception('Error al cargar {name}s: ${{response.statusCode}}');
       }}
@@ -2016,7 +2048,16 @@ class {name}Service {{
 
       if (response.statusCode == 200) {{
         final List<dynamic> jsonList = json.decode(response.body);
-        return jsonList.map((json) => {name}.fromJson(json)).toList();
+        // El backend puede devolver listas mixtas [objeto, id] debido a @JsonIdentityInfo
+        return jsonList.map((item) {{
+          if (item is Map<String, dynamic>) {{
+            return {name}.fromJson(item);
+          }} else if (item is int) {{
+            // Backend devolvió solo el ID - crear objeto parcial
+            return {name}.fromJson({{'id': item}});
+          }}
+          return null;
+        }}).whereType<{name}>().toList();
       }} else {{
         throw Exception('Error al cargar {name}s: ${{response.statusCode}}');
       }}
