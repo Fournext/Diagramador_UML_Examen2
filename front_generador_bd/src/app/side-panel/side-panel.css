@@ -27,7 +27,7 @@
   padding: 10px;
   border-radius: 4px;
   box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-  z-index: 1000;
+  z-index: 100;
   pointer-events: none;
   text-align: center;
   width: 160px;
