@@ -366,4 +366,8 @@
       }
     </div>
   </div>
+
+  @if(isLoadingImage()||isLoadingChatbox()|| isLoadingGeneratefrontend()||isLoadingGenerateBackend()){
+  <app-spinner />
+  }
 </div>

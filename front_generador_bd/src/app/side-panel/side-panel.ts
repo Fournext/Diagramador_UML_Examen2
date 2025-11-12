@@ -8,16 +8,21 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { SqlExportService } from '../../services/exports/sql-export.service';
 import { UmlImageServiceTs } from '../../services/imports/uml-image.service';
 import { FrontendGeneratorService } from '../../services/exports/frontend-generator.service';
+import { Spinner } from "../components/diagram/spinner/spinner";
+import { ChatbotService } from '../../services/IA/chatbot.service';
+import { BackendGeneratorService } from '../../services/exports/backend-generator.service';
 
 
 @Component({
   selector: 'app-side-panel',
-  imports: [CommonModule, DragDropModule, FormsModule],
+  imports: [CommonModule, DragDropModule, FormsModule, Spinner],
   templateUrl: './side-panel.html',
   styleUrl: './side-panel.css'
 })
 export class SidePanel {
   private frontendGeneratorService = inject(FrontendGeneratorService);
+  private chatboxService = inject(ChatbotService);
+  private backendGeneratorService=inject(BackendGeneratorService);
   @Output() elementDragged = new EventEmitter<CdkDragEnd>();
   @Output() saveClicked = new EventEmitter<void>();
   @Output() generateClicked = new EventEmitter<string>();
@@ -174,6 +179,7 @@ export class SidePanel {
   }
 
   onImportImage(event: Event) {
+    this.umlImageService.loading.set(true);
     const input = event.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
 
@@ -185,10 +191,12 @@ export class SidePanel {
         const umlJson = res.uml_json || res; // depende de la respuesta del backend
         this.diagramService.loadFromJson(umlJson);
         this.analyzingModel.set(false);
+        this.umlImageService.loading.set(false);
       },
       error: (err) => {
         console.error('❌ Error al analizar imagen UML:', err);
         this.analyzingModel.set(false);
+        this.umlImageService.loading.set(false);
       }
     });
   }
@@ -197,6 +205,20 @@ export class SidePanel {
     const umlJson = this.diagramService.exportToJson();
     this.frontendGeneratorService.generateFrontend(umlJson);
   }
+
+  isLoadingImage(): boolean {
+    return this.umlImageService.loading();
+  }
+  isLoadingChatbox(): boolean {
+    return this.chatboxService.isLoading();
+  }
+  isLoadingGeneratefrontend(): boolean {
+    return this.frontendGeneratorService.loading();
+  }
+  isLoadingGenerateBackend():boolean{
+    return this.backendGeneratorService.loading();
+  }
+  
 
 
 }

@@ -89,13 +89,16 @@ export class Diagram implements AfterViewInit {
   }
 
   generateFromPrompt(prompt: string) {
+    this.chatbot.isLoading.set(true);
     this.chatbot.generateDiagram(prompt).subscribe({
       next: (json) => {
         console.log('Respuesta del chatbot:', json);
         this.diagramService.loadFromJson(json,true);
+        this.chatbot.isLoading.set(false);
       },
       error: (err) => {
         console.error('Error al generar diagrama desde chatbot', err);
+        this.chatbot.isLoading.set(false);
       }
     });
   }
