@@ -638,6 +638,10 @@ class HomePage extends StatelessWidget {{
                   from_json_fields.append(f"{attr['name']}: json['{json_key}'] is int ? json['{json_key}'] : int.tryParse(json['{json_key}']?.toString() ?? '0') ?? 0")
               elif attr_type == 'double':
                   from_json_fields.append(f"{attr['name']}: json['{json_key}'] is double ? json['{json_key}'] : double.tryParse(json['{json_key}']?.toString() ?? '0.0') ?? 0.0")
+              elif attr_type == 'String':
+                  from_json_fields.append(f"{attr['name']}: json['{json_key}']?.toString() ?? ''")
+              elif attr_type == 'bool':
+                  from_json_fields.append(f"{attr['name']}: json['{json_key}'] == true")
               else:
                   from_json_fields.append(f"{attr['name']}: json['{json_key}']")
           
@@ -671,6 +675,10 @@ class HomePage extends StatelessWidget {{
               from_json_fields.append(f"{attr['name']}: json['{json_key}'] is int ? json['{json_key}'] : int.tryParse(json['{json_key}']?.toString() ?? '0') ?? 0")
           elif attr_type == 'double':
               from_json_fields.append(f"{attr['name']}: json['{json_key}'] is double ? json['{json_key}'] : double.tryParse(json['{json_key}']?.toString() ?? '0.0') ?? 0.0")
+          elif attr_type == 'String':
+              from_json_fields.append(f"{attr['name']}: json['{json_key}']?.toString() ?? ''")
+          elif attr_type == 'bool':
+              from_json_fields.append(f"{attr['name']}: json['{json_key}'] == true")
           else:
               from_json_fields.append(f"{attr['name']}: json['{json_key}']")
 
@@ -707,19 +715,13 @@ class HomePage extends StatelessWidget {{
               elif rel["kind"] == "one_to_many":
                   # OneToMany: Parsear lista de objetos anidados que vienen en GET
                   # El backend puede devolver listas mixtas [objeto, id, objeto] debido a @JsonIdentityInfo
-                  # Necesitamos manejar ambos casos: objetos completos (Map) y solo IDs (int)
+                  # Filtrar solo los objetos completos (Maps), omitir los IDs sueltos
                   json_key = self._to_backend_json_key(rel_name)
                   parse_logic = f"""json['{json_key}'] is List 
-          ? (json['{json_key}'] as List).map((e) {{
-              if (e is Map<String, dynamic>) {{
-                return {rel['to']}.fromJson(e);
-              }} else if (e is int) {{
-                // Backend devolvió solo el ID (por @JsonIdentityInfo)
-                // Crear objeto parcial solo con el ID
-                return {rel['to']}.fromJson({{'id': e}});
-              }}
-              return null;
-            }}).whereType<{rel['to']}>().toList()
+          ? (json['{json_key}'] as List)
+              .whereType<Map<String, dynamic>>()
+              .map((e) => {rel['to']}.fromJson(e))
+              .toList()
           : []"""
                   from_json_fields.append(f"{rel_name}: {parse_logic}")
 
@@ -930,15 +932,11 @@ class {name}Service {{
       if (response.statusCode == 200) {{
         final List<dynamic> jsonList = json.decode(response.body);
         // El backend puede devolver listas mixtas [objeto, id] debido a @JsonIdentityInfo
-        return jsonList.map((item) {{
-          if (item is Map<String, dynamic>) {{
-            return {name}.fromJson(item);
-          }} else if (item is int) {{
-            // Backend devolvió solo el ID - crear objeto parcial
-            return {name}.fromJson({{'id': item}});
-          }}
-          return null;
-        }}).whereType<{name}>().toList();
+        // Filtrar solo los objetos completos (Maps), omitir los IDs sueltos
+        return jsonList
+            .whereType<Map<String, dynamic>>()
+            .map((item) => {name}.fromJson(item))
+            .toList();
       }} else {{
         throw Exception('Error al cargar {name}s: ${{response.statusCode}}');
       }}
@@ -2049,15 +2047,11 @@ class {name}Service {{
       if (response.statusCode == 200) {{
         final List<dynamic> jsonList = json.decode(response.body);
         // El backend puede devolver listas mixtas [objeto, id] debido a @JsonIdentityInfo
-        return jsonList.map((item) {{
-          if (item is Map<String, dynamic>) {{
-            return {name}.fromJson(item);
-          }} else if (item is int) {{
-            // Backend devolvió solo el ID - crear objeto parcial
-            return {name}.fromJson({{'id': item}});
-          }}
-          return null;
-        }}).whereType<{name}>().toList();
+        // Filtrar solo los objetos completos (Maps), omitir los IDs sueltos
+        return jsonList
+            .whereType<Map<String, dynamic>>()
+            .map((item) => {name}.fromJson(item))
+            .toList();
       }} else {{
         throw Exception('Error al cargar {name}s: ${{response.statusCode}}');
       }}
