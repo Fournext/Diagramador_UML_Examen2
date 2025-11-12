@@ -21,7 +21,11 @@ import com.fasterxml.jackson.annotation.*;
 @NoArgsConstructor
 @AllArgsConstructor
 @SuperBuilder
-@JsonIdentityInfo(generator = ObjectIdGenerators.PropertyGenerator.class, property = "id")
+@JsonIdentityInfo(
+    generator = ObjectIdGenerators.PropertyGenerator.class,
+    property = "id",
+    scope = {{EntityName}}.class
+)
 {{#isParent}}
     @Inheritance(strategy = InheritanceType.JOINED)
 {{/isParent}}
